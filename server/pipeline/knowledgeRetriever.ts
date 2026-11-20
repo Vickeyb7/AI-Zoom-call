@@ -17,7 +17,7 @@ export async function retrieveAndRankKnowledge(params: {
   context: ConversationContextSnapshot;
   topK?: number;
 }): Promise<RetrievedKnowledgeContext> {
-  const { organisationId, latestText, signal, context, topK = 4 } = params;
+  const { organisationId, latestText, signal, context, topK = 5 } = params;
 
   // 1. Convert objection + evolving conversation context into a focused retrieval query
   const queryParts: string[] = [latestText];
@@ -36,11 +36,16 @@ export async function retrieveAndRankKnowledge(params: {
   }
   const query = queryParts.join(' | ');
 
-  // 2. Retrieve from tenant-scoped knowledge base (mock KB docs + any uploaded docs)
-  const rankedResults = await store.searchKnowledge(organisationId, query, topK);
+  // 2. Retrieve from tenant-scoped approved knowledge base (hybrid vector + lexical + rerank)
+  const rankedResults = await store.searchKnowledge(organisationId, query, topK, {
+    includeDrafts: false,
+  });
 
-  // 3. Determine transparent retrieval mode (Groq uses tenant-scoped lexical retrieval without vector embeddings)
-  const retrievalMode: RetrievedKnowledgeContext['retrievalMode'] = 'mock_kb_lexical';
+  // 3. Determine transparent retrieval mode based on whether Hugging Face embeddings were used
+  const usedVectors = rankedResults.some((r) => Boolean(r.embeddingModel));
+  const retrievalMode: RetrievedKnowledgeContext['retrievalMode'] = usedVectors
+    ? 'hybrid_rag_embeddings'
+    : 'mock_kb_lexical';
 
   const chunksForPrompt: KnowledgeChunk[] = rankedResults.map((r, idx) => ({
     id: r.chunkId,
@@ -49,6 +54,10 @@ export async function retrieveAndRankKnowledge(params: {
     docTitle: r.docTitle,
     category: r.category,
     sectionTitle: r.sectionTitle,
+    headingPath: r.headingPath,
+    pageNumber: r.pageNumber,
+    tokenCount: r.tokenCount,
+    embeddingModel: r.embeddingModel,
     chunkIndex: idx,
     content: r.content,
   }));

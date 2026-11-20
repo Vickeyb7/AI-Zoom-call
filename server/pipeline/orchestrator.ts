@@ -104,7 +104,7 @@ export async function runLiveIntelligencePipeline(params: {
     latestText: turn.text,
     signal,
     context,
-    topK: 4,
+    topK: 5,
   });
   console.log(`[Pipeline] RAG retrieved ${retrieved.rankedResults.length} chunks (${retrieved.retrievalMode}) in ${Date.now() - tRag}ms`);
 

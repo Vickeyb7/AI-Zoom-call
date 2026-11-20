@@ -208,6 +208,49 @@ export interface ZoomLinkState {
   lastEventNote?: string;
 }
 
+export type DisplayDensity = 'compact' | 'standard' | 'expanded';
+
+export interface CopilotPreferences {
+  density: DisplayDensity;
+  hudPosition?: 'bottom-right' | 'bottom-left';
+  hudOpacity?: number;
+  showSourcesExpanded?: boolean;
+  alwaysOnTop?: boolean;
+  preferredDisplayId?: number | string;
+  privacyMode?: 'private' | 'standard';
+  transcriptRetentionDays?: number;
+  bounds?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  updatedAt?: string;
+}
+
+export interface ConversationStateObjection {
+  category: ObjectionCategory | string;
+  summary: string;
+  status: 'active' | 'evolving' | 'resolved';
+}
+
+export interface ConversationState {
+  currentVendor?: string;
+  currentWorkflow?: string;
+  confirmedPainPoints: string[];
+  possiblePainPoints: string[];
+  desiredOutcomes: string[];
+  objections: ConversationStateObjection[];
+  buyingSignals: string[];
+  stakeholders: string[];
+  budgetStatus: 'unknown' | 'discussed' | 'confirmed';
+  timelineStatus: 'unknown' | 'discussed' | 'confirmed';
+  decisionProcessStatus: 'unknown' | 'discussed' | 'confirmed';
+  discoveryGaps: string[];
+  openQuestions: string[];
+  updatedAt: string;
+}
+
 export interface MeetingSession {
   id: string;
   organisationId: string;
@@ -228,6 +271,7 @@ export interface MeetingSession {
   prospectTalkRatio: number; // 0-100
   sentimentTrend: number[]; // sparkline values 0-100
   qualification: QualificationItem[];
+  conversationState?: ConversationState;
   transcript: TranscriptTurn[];
   insights: SalesInsight[];
   signals: SignalEvent[];
@@ -295,6 +339,17 @@ export type KnowledgeCategory =
   | 'Security & Compliance';
 
 export type KnowledgeStatus = 'processing' | 'indexed' | 'archived' | 'failed';
+export type KnowledgeApprovalStatus = 'approved' | 'draft' | 'expired' | 'rejected';
+export type KnowledgeSensitivity = 'public' | 'internal' | 'confidential' | 'restricted';
+export type IngestionStage =
+  | 'queued'
+  | 'extracting'
+  | 'chunking'
+  | 'chunked'
+  | 'embedding'
+  | 'indexed'
+  | 'failed'
+  | 'needs_review';
 
 export interface KnowledgeChunk {
   id: string;
@@ -303,9 +358,15 @@ export interface KnowledgeChunk {
   docTitle: string;
   category: KnowledgeCategory;
   sectionTitle?: string;
+  headingPath?: string;
+  pageNumber?: number;
+  tokenCount?: number;
+  isAtomicFact?: boolean;
   chunkIndex: number;
   content: string;
   embedding?: number[];
+  embeddingModel?: string;
+  embeddingDimension?: number;
 }
 
 export interface KnowledgeDoc {
@@ -313,12 +374,20 @@ export interface KnowledgeDoc {
   organisationId: string;
   title: string;
   fileName: string;
-  fileType: 'pdf' | 'docx' | 'pptx' | 'md' | 'txt';
+  fileType: 'pdf' | 'docx' | 'pptx' | 'html' | 'md' | 'txt';
   category: KnowledgeCategory;
   owner: string;
   version: string;
   reviewDate: string;
   status: KnowledgeStatus;
+  approvalStatus?: KnowledgeApprovalStatus;
+  validFrom?: string;
+  validUntil?: string;
+  sensitivity?: KnowledgeSensitivity;
+  checksum?: string;
+  ingestionStage?: IngestionStage;
+  embeddingModel?: string;
+  embeddingDimension?: number;
   summary: string;
   wordCount: number;
   chunkCount: number;
@@ -357,6 +426,12 @@ export interface RagSearchResult {
   docTitle: string;
   category: KnowledgeCategory;
   sectionTitle?: string;
+  headingPath?: string;
+  pageNumber?: number;
+  tokenCount?: number;
+  approvalStatus?: KnowledgeApprovalStatus;
+  version?: string;
+  embeddingModel?: string;
   content: string;
   score: number;
 }

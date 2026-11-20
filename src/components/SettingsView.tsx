@@ -128,14 +128,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </label>
               <input
                 type="number"
-                min={7}
+                min={0}
                 max={365}
                 value={retentionDays}
                 onChange={(e) => setRetentionDays(Number(e.target.value))}
                 className="eki-input w-full rounded-md px-3 py-2 text-[13px] font-mono tabular-nums"
               />
               <p className="mt-1 text-[11px] text-slate-500">
-                Meetings &amp; derived segments expire automatically after retention window.
+                0 = ephemeral (raw transcripts are never persisted to disk); 1–365 = auto-purge completed transcripts after N days.
               </p>
             </div>
 

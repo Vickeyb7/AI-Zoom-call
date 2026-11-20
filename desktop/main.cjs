@@ -11,6 +11,7 @@ const {
   session,
   shell,
 } = require('electron');
+const fs = require('fs');
 const path = require('path');
 
 function resolveBaseServerUrl() {
@@ -30,7 +31,69 @@ let tray = null;
 let hudState = {
   alwaysOnTop: true,
   contentProtection: true,
+  preferredDisplayId: null,
 };
+
+function getBoundsStorePath() {
+  return path.join(app.getPath('userData'), 'hud-bounds.json');
+}
+
+function loadSavedBounds() {
+  try {
+    const file = getBoundsStorePath();
+    if (!fs.existsSync(file)) return null;
+    return JSON.parse(fs.readFileSync(file, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+function saveBounds(win) {
+  if (!win || win.isDestroyed()) return;
+  try {
+    const bounds = win.getBounds();
+    const display = screen.getDisplayMatching(bounds);
+    hudState.preferredDisplayId = display.id;
+    fs.writeFileSync(
+      getBoundsStorePath(),
+      JSON.stringify(
+        {
+          bounds,
+          preferredDisplayId: display.id,
+          updatedAt: new Date().toISOString(),
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    );
+  } catch {
+    // Ignore disk persistence errors
+  }
+}
+
+function isRectVisibleOnAnyDisplay(rect) {
+  const displays = screen.getAllDisplays();
+  return displays.some((d) => {
+    const wa = d.workArea;
+    return (
+      rect.x < wa.x + wa.width - 40 &&
+      rect.x + rect.width > wa.x + 40 &&
+      rect.y < wa.y + wa.height - 40 &&
+      rect.y + rect.height > wa.y + 40
+    );
+  });
+}
+
+function listDisplaysSummary() {
+  const primaryId = screen.getPrimaryDisplay().id;
+  return screen.getAllDisplays().map((d, idx) => ({
+    id: d.id,
+    label: d.label || `Display ${idx + 1}${d.id === primaryId ? ' (Primary)' : ''}`,
+    primary: d.id === primaryId,
+    bounds: d.workArea,
+  }));
+}
 
 function createTrayIcon() {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
@@ -44,13 +107,20 @@ function createTrayIcon() {
 
 function broadcastState() {
   if (hudWindow && !hudWindow.isDestroyed()) {
-    hudWindow.webContents.send('hud:state-changed', hudState);
+    hudWindow.webContents.send('hud:state-changed', {
+      ...hudState,
+      displays: listDisplaysSummary(),
+    });
   }
   refreshTrayMenu();
 }
 
-function positionCorner(win, corner = 'bottom-right') {
-  const workArea = screen.getPrimaryDisplay().workArea;
+function positionCorner(win, corner = 'bottom-right', targetDisplayId = null) {
+  const displays = screen.getAllDisplays();
+  const display =
+    (targetDisplayId != null && displays.find((d) => d.id === targetDisplayId)) ||
+    screen.getPrimaryDisplay();
+  const workArea = display.workArea;
   const [winWidth, winHeight] = win.getSize();
   const margin = 16;
   const x = corner.endsWith('left')
@@ -60,6 +130,16 @@ function positionCorner(win, corner = 'bottom-right') {
     ? workArea.y + margin
     : Math.max(workArea.y + margin, workArea.y + workArea.height - winHeight - margin);
   win.setPosition(x, y);
+  saveBounds(win);
+}
+
+function recoverWindowIfOffscreen() {
+  if (!hudWindow || hudWindow.isDestroyed()) return;
+  const bounds = hudWindow.getBounds();
+  if (!isRectVisibleOnAnyDisplay(bounds)) {
+    positionCorner(hudWindow, 'bottom-right', screen.getPrimaryDisplay().id);
+    broadcastState();
+  }
 }
 
 function applyWindowFlags(win) {
@@ -69,12 +149,16 @@ function applyWindowFlags(win) {
 }
 
 function createHudWindow() {
-  const width = 350;
-  const height = 430;
+  const saved = loadSavedBounds();
+  const defaultWidth = 350;
+  const defaultHeight = 430;
+  const useSavedBounds = saved?.bounds && isRectVisibleOnAnyDisplay(saved.bounds);
 
   hudWindow = new BrowserWindow({
-    width,
-    height,
+    width: useSavedBounds ? saved.bounds.width : defaultWidth,
+    height: useSavedBounds ? saved.bounds.height : defaultHeight,
+    x: useSavedBounds ? saved.bounds.x : undefined,
+    y: useSavedBounds ? saved.bounds.y : undefined,
     minWidth: 320,
     minHeight: 360,
     frame: false,
@@ -89,9 +173,22 @@ function createHudWindow() {
     },
   });
 
-  positionCorner(hudWindow, 'bottom-right');
+  if (!useSavedBounds) {
+    positionCorner(hudWindow, 'bottom-right', saved?.preferredDisplayId ?? null);
+  } else {
+    hudState.preferredDisplayId = saved.preferredDisplayId ?? screen.getPrimaryDisplay().id;
+  }
+
   applyWindowFlags(hudWindow);
   hudWindow.loadURL(HUD_URL);
+
+  let saveTimer = null;
+  const scheduleSave = () => {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => saveBounds(hudWindow), 350);
+  };
+  hudWindow.on('moved', scheduleSave);
+  hudWindow.on('resized', scheduleSave);
 
   hudWindow.webContents.on('did-fail-load', () => {
     const fallbackHtml = `
@@ -121,15 +218,33 @@ function toggleHudVisibility() {
     hudWindow.hide();
   } else {
     hudWindow.show();
+    recoverWindowIfOffscreen();
     applyWindowFlags(hudWindow);
   }
 }
 
 function refreshTrayMenu() {
   if (!tray) return;
+  const displays = listDisplaysSummary();
+  const displaySubmenu = displays.map((d) => ({
+    label: d.label,
+    type: 'radio',
+    checked: hudState.preferredDisplayId === d.id,
+    click: () => {
+      if (hudWindow) {
+        hudWindow.show();
+        positionCorner(hudWindow, 'bottom-right', d.id);
+        broadcastState();
+      }
+    },
+  }));
+
   const menu = Menu.buildFromTemplate([
     {
-      label: hudWindow && hudWindow.isVisible() ? 'Hide Copilot HUD (Cmd/Ctrl+Shift+Space)' : 'Show Copilot HUD (Cmd/Ctrl+Shift+Space)',
+      label:
+        hudWindow && hudWindow.isVisible()
+          ? 'Hide Copilot HUD (Cmd/Ctrl+Shift+Space)'
+          : 'Show Copilot HUD (Cmd/Ctrl+Shift+Space)',
       click: toggleHudVisibility,
     },
     {
@@ -154,11 +269,15 @@ function refreshTrayMenu() {
     },
     { type: 'separator' },
     {
+      label: 'Move HUD to Monitor',
+      submenu: displaySubmenu,
+    },
+    {
       label: 'Snap to Bottom-Right Corner',
       click: () => {
         if (hudWindow) {
           hudWindow.show();
-          positionCorner(hudWindow, 'bottom-right');
+          positionCorner(hudWindow, 'bottom-right', hudState.preferredDisplayId);
         }
       },
     },
@@ -167,7 +286,7 @@ function refreshTrayMenu() {
       click: () => {
         if (hudWindow) {
           hudWindow.show();
-          positionCorner(hudWindow, 'top-right');
+          positionCorner(hudWindow, 'top-right', hudState.preferredDisplayId);
         }
       },
     },
@@ -188,7 +307,9 @@ function refreshTrayMenu() {
 
 app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-    callback(permission === 'media' || permission === 'display-capture' || permission === 'audioCapture');
+    callback(
+      permission === 'media' || permission === 'display-capture' || permission === 'audioCapture',
+    );
   });
 
   session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
@@ -206,6 +327,16 @@ app.whenReady().then(() => {
 
   createHudWindow();
 
+  screen.on('display-removed', () => {
+    recoverWindowIfOffscreen();
+    broadcastState();
+  });
+  screen.on('display-added', () => broadcastState());
+  screen.on('display-metrics-changed', () => {
+    recoverWindowIfOffscreen();
+    broadcastState();
+  });
+
   tray = new Tray(createTrayIcon());
   tray.setToolTip('AI Sales Strategist — Live Zoom HUD');
   tray.on('click', toggleHudVisibility);
@@ -213,7 +344,19 @@ app.whenReady().then(() => {
 
   globalShortcut.register('CommandOrControl+Shift+Space', toggleHudVisibility);
 
-  ipcMain.handle('hud:get-state', () => hudState);
+  ipcMain.handle('hud:get-state', () => ({
+    ...hudState,
+    displays: listDisplaysSummary(),
+  }));
+  ipcMain.handle('hud:get-displays', () => listDisplaysSummary());
+  ipcMain.handle('hud:move-to-display', (_event, displayId, corner = 'bottom-right') => {
+    if (hudWindow) {
+      hudWindow.show();
+      positionCorner(hudWindow, corner, displayId);
+      broadcastState();
+    }
+    return { ...hudState, displays: listDisplaysSummary() };
+  });
   ipcMain.handle('hud:set-content-protection', (_event, enabled) => {
     hudState.contentProtection = Boolean(enabled);
     if (hudWindow) hudWindow.setContentProtection(hudState.contentProtection);

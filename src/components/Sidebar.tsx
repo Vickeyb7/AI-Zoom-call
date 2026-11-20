@@ -5,6 +5,7 @@ import {
   Database,
   FileText,
   LayoutDashboard,
+  LogOut,
   PauseCircle,
   Radio,
   Settings,
@@ -27,6 +28,12 @@ interface SidebarProps {
   onOpenMeeting: (meetingId: string) => void;
   organisation: Organisation | null;
   currentUser: UserProfile | null;
+  googleUser?: {
+    name: string;
+    email: string;
+    photoURL?: string;
+  };
+  onSignOut?: () => void;
 }
 
 const NAV_ITEMS: { id: NavTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
@@ -50,7 +57,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenMeeting,
   organisation,
   currentUser,
+  googleUser,
+  onSignOut,
 }) => {
+  const [avatarFailed, setAvatarFailed] = React.useState(false);
+  const displayName = googleUser?.name || currentUser?.name || 'Workspace User';
+  const displaySubtitle = googleUser?.email || currentUser?.role || 'Organisation Admin';
+  const avatarSrc = googleUser?.photoURL || '';
+  const initials = displayName
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((p) => p[0])
+    .join('')
+    .toUpperCase() || 'U';
   const isPaused = liveMeeting?.status === 'paused';
 
   return (
@@ -212,31 +232,55 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
       </nav>
 
-      {/* User Profile Footer */}
-      <div className="p-3 border-t border-slate-800/80 bg-[#0F172A]/60">
-        <div className={`flex items-center gap-3 ${collapsed ? 'justify-center' : ''}`}>
-          <div className="w-9 h-9 rounded-full overflow-hidden border border-slate-700 bg-slate-800 shrink-0 flex items-center justify-center">
-            <img
-              src="/src/assets/images/avatar_ae_profile_1794937503685.jpg"
-              alt={currentUser?.name || 'Elena Vance'}
-              referrerPolicy="no-referrer"
-              className="w-full h-full object-cover"
-              onError={(e) => {
-                (e.currentTarget as HTMLImageElement).style.display = 'none';
-              }}
-            />
+      {/* Authenticated Google User Footer */}
+      <div className="p-3 border-t border-slate-800/80 bg-[#0F172A]/60 space-y-2.5">
+        <div className={`flex items-center gap-2.5 ${collapsed ? 'justify-center' : ''}`}>
+          <div className="w-9 h-9 rounded-full overflow-hidden border border-slate-700 bg-[#1E293B] shrink-0 flex items-center justify-center text-xs font-semibold text-indigo-300">
+            {avatarSrc && !avatarFailed ? (
+              <img
+                src={avatarSrc}
+                alt={displayName}
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover"
+                onError={() => setAvatarFailed(true)}
+              />
+            ) : (
+              <span>{initials}</span>
+            )}
           </div>
           {!collapsed && (
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="text-[13px] font-semibold text-white truncate">
-                {currentUser?.name || 'Elena Vance'}
+                {displayName}
               </div>
-              <div className="text-[11px] text-slate-400 truncate">
-                {currentUser?.role || 'Organisation Admin'}
+              <div className="text-[11px] text-slate-400 truncate" title={displaySubtitle}>
+                {displaySubtitle}
               </div>
             </div>
           )}
+          {onSignOut && !collapsed && (
+            <button
+              type="button"
+              onClick={onSignOut}
+              title="Sign out of Google account"
+              aria-label="Sign out"
+              className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors shrink-0"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
+        {onSignOut && collapsed && (
+          <button
+            type="button"
+            onClick={onSignOut}
+            title="Sign out of Google account"
+            aria-label="Sign out"
+            className="w-full p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors flex items-center justify-center"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
     </aside>
   );

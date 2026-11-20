@@ -1,9 +1,11 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import JSZip from 'jszip';
 import type {
   AuditEvent,
   Battlecard,
+  CopilotPreferences,
   DashboardData,
   EvaluationMetrics,
   KnowledgeChunk,
@@ -16,7 +18,9 @@ import type {
   StakeholderProfile,
   UserProfile,
 } from '../src/types/sales.ts';
-import { salesAI } from './ai.ts';
+import { getTranscriptRetentionDays, salesAI } from './ai.ts';
+import { getEmbeddingConfig } from './embeddings.ts';
+import { logger } from './logger.ts';
 
 export interface StoreState {
   organisations: Organisation[];
@@ -27,10 +31,51 @@ export interface StoreState {
   knowledgeDocs: KnowledgeDoc[];
   knowledgeChunks: KnowledgeChunk[];
   battlecards: Battlecard[];
+  preferencesByUser?: Record<string, CopilotPreferences>;
 }
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const STORE_PATH = path.join(DATA_DIR, 'store.json');
+
+export function computeSha256(input: string | Buffer): string {
+  return crypto.createHash('sha256').update(input).digest('hex');
+}
+
+export function estimateTokens(text: string): number {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words * 1.33));
+}
+
+export function extractHtmlText(html: string): string {
+  let cleaned = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
+    .replace(/<footer[\s\S]*?<\/footer>/gi, ' ');
+
+  cleaned = cleaned
+    .replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '\n\n# $1\n\n')
+    .replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '\n\n## $1\n\n')
+    .replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '\n\n### $1\n\n')
+    .replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, '\n\n#### $1\n\n')
+    .replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '\n- $1')
+    .replace(/<tr[^>]*>([\s\S]*?)<\/tr>/gi, '\n| $1 |')
+    .replace(/<\/(td|th)>/gi, ' | ')
+    .replace(/<\/(p|div|section|article|blockquote)>/gi, '\n\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n');
+
+  return cleaned.trim();
+}
 
 function cosineSimilarity(a: number[], b: number[]): number {
   if (!a || !b || a.length === 0 || a.length !== b.length) return 0;
@@ -46,51 +91,182 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-function lexicalScore(query: string, text: string): number {
-  const tokens = query
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((t) => t.length > 2);
+function lexicalScore(query: string, text: string, headingText = ''): number {
+  const tokens = Array.from(
+    new Set(
+      query
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((t) => t.length > 2),
+    ),
+  );
   if (tokens.length === 0) return 0;
   const hay = text.toLowerCase();
+  const headingHay = headingText.toLowerCase();
   let hits = 0;
+  let headingBonus = 0;
   for (const tok of tokens) {
     if (hay.includes(tok)) hits += 1;
+    if (headingHay && headingHay.includes(tok)) headingBonus += 0.25;
   }
-  return hits / tokens.length;
+  const base = hits / tokens.length;
+  return Math.min(1, base + Math.min(0.25, headingBonus / Math.max(1, tokens.length)));
+}
+
+export interface StructuredChunkPiece {
+  content: string;
+  sectionTitle?: string;
+  headingPath?: string;
+  pageNumber?: number;
+  tokenCount: number;
+  isAtomicFact: boolean;
+}
+
+function detectAtomicFact(block: string): boolean {
+  const lower = block.toLowerCase();
+  if (/\|.+\|/.test(block)) return true; // Markdown/HTML table row
+  if (/(\$\d+|\d+%|sla|soc2|soc 2|hipaa|iso 27001|fedramp|rpo|p99)/i.test(lower) && block.length < 650) {
+    return true;
+  }
+  if (/^(q:|a:|prospect objection:|recommended)/i.test(block.trim())) return true;
+  return false;
+}
+
+function takeTrailingOverlap(text: string, overlapTokens: number): string {
+  if (!text || overlapTokens <= 0) return '';
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  const targetWords = Math.max(12, Math.floor(overlapTokens / 1.33));
+  if (words.length <= targetWords) return '';
+  return words.slice(-targetWords).join(' ');
 }
 
 export function chunkTextWithSections(
   text: string,
-  maxChars = 750,
-): { content: string; sectionTitle?: string }[] {
+  options?: {
+    targetTokens?: number;
+    minTokens?: number;
+    maxTokens?: number;
+    overlapTokens?: number;
+  },
+): StructuredChunkPiece[] {
+  const targetTokens = options?.targetTokens ?? 500;
+  const minTokens = options?.minTokens ?? 150;
+  const maxTokens = options?.maxTokens ?? 800;
+  const overlapTokens = options?.overlapTokens ?? 75;
+
   const blocks = text
     .split(/\n{2,}/)
     .map((p) => p.trim())
     .filter(Boolean);
-  const chunks: { content: string; sectionTitle?: string }[] = [];
+
+  const chunks: StructuredChunkPiece[] = [];
+  const headingStack: { level: number; text: string }[] = [];
   let current = '';
   let currentSection: string | undefined;
+  let currentHeadingPath: string | undefined;
+  let currentPageNumber: number | undefined;
+  let currentAtomic = false;
+
+  const flushChunk = (withOverlap: boolean) => {
+    const trimmed = current.trim();
+    if (!trimmed) return;
+    chunks.push({
+      content: trimmed,
+      sectionTitle: currentSection,
+      headingPath: currentHeadingPath,
+      pageNumber: currentPageNumber,
+      tokenCount: estimateTokens(trimmed),
+      isAtomicFact: currentAtomic,
+    });
+    current = withOverlap ? takeTrailingOverlap(trimmed, overlapTokens) : '';
+    currentAtomic = false;
+  };
 
   for (const block of blocks) {
-    const headingMatch =
-      block.match(/^#{1,3}\s+(.+)$/) || block.match(/^\[(Slide\s+\d+|Page\s+\d+)\]/i);
-    if (headingMatch) {
-      currentSection = headingMatch[1].trim().slice(0, 80);
+    const mdHeading = block.match(/^(#{1,4})\s+(.+)$/);
+    const slideOrPage = block.match(/^\[(Slide|Page)\s+(\d+)\]/i);
+
+    if (mdHeading) {
+      // Flush previous section before starting a new heading if we have enough tokens
+      if (current.trim() && estimateTokens(current) >= minTokens) {
+        flushChunk(false);
+      }
+      const level = mdHeading[1].length;
+      const headingText = mdHeading[2].trim().slice(0, 90);
+      while (headingStack.length > 0 && headingStack[headingStack.length - 1].level >= level) {
+        headingStack.pop();
+      }
+      headingStack.push({ level, text: headingText });
+      currentSection = headingText;
+      currentHeadingPath = headingStack.map((h) => h.text).join(' > ');
+    } else if (slideOrPage) {
+      if (current.trim() && estimateTokens(current) >= minTokens) {
+        flushChunk(false);
+      }
+      currentPageNumber = parseInt(slideOrPage[2], 10);
+      currentSection = `${slideOrPage[1]} ${slideOrPage[2]}`;
+      currentHeadingPath = currentSection;
     }
 
-    if ((current + '\n\n' + block).length > maxChars && current.length > 0) {
-      chunks.push({ content: current.trim(), sectionTitle: currentSection });
-      current = block;
-    } else {
+    const blockTokens = estimateTokens(block);
+    const blockIsAtomic = detectAtomicFact(block);
+
+    // If single block exceeds maxTokens, split cleanly on sentences with overlap
+    if (blockTokens > maxTokens) {
+      if (current.trim()) flushChunk(false);
+      const sentences = block.split(/(?<=[.!?])\s+/).filter(Boolean);
+      let acc = '';
+      for (const s of sentences) {
+        const candidate = acc ? `${acc} ${s}` : s;
+        if (estimateTokens(candidate) > targetTokens && acc.trim()) {
+          chunks.push({
+            content: acc.trim(),
+            sectionTitle: currentSection,
+            headingPath: currentHeadingPath,
+            pageNumber: currentPageNumber,
+            tokenCount: estimateTokens(acc),
+            isAtomicFact: false,
+          });
+          const overlap = takeTrailingOverlap(acc, overlapTokens);
+          acc = overlap ? `${overlap} ${s}` : s;
+        } else {
+          acc = candidate;
+        }
+      }
+      if (acc.trim()) {
+        current = acc.trim();
+        currentAtomic = false;
+      }
+      continue;
+    }
+
+    const combined = current ? `${current}\n\n${block}` : block;
+    const combinedTokens = estimateTokens(combined);
+
+    if (combinedTokens > targetTokens && current.trim() && estimateTokens(current) >= minTokens) {
+      flushChunk(true);
       current = current ? `${current}\n\n${block}` : block;
+      currentAtomic = blockIsAtomic;
+    } else {
+      current = combined;
+      currentAtomic = currentAtomic || blockIsAtomic;
     }
   }
+
   if (current.trim()) {
-    chunks.push({ content: current.trim(), sectionTitle: currentSection });
+    flushChunk(false);
   }
+
   if (chunks.length === 0 && text.trim()) {
-    chunks.push({ content: text.trim().slice(0, maxChars), sectionTitle: currentSection });
+    const trimmed = text.trim();
+    chunks.push({
+      content: trimmed,
+      sectionTitle: currentSection,
+      headingPath: currentHeadingPath,
+      pageNumber: currentPageNumber,
+      tokenCount: estimateTokens(trimmed),
+      isAtomicFact: detectAtomicFact(trimmed),
+    });
   }
   return chunks;
 }
@@ -440,6 +616,7 @@ Northbridge Vault provides FIPS 140-3 Level 4 hardware key custody strictly isol
   const knowledgeDocs: KnowledgeDoc[] = [];
   const knowledgeChunks: KnowledgeChunk[] = [];
 
+  const embCfg = getEmbeddingConfig();
   for (const doc of rawDocs) {
     const pieces = chunkTextWithSections(doc.content);
     const words = doc.content.split(/\s+/).filter(Boolean).length;
@@ -454,6 +631,13 @@ Northbridge Vault provides FIPS 140-3 Level 4 hardware key custody strictly isol
       version: doc.version,
       reviewDate: doc.reviewDate,
       status: 'indexed',
+      approvalStatus: 'approved',
+      validUntil: doc.reviewDate,
+      sensitivity: 'internal',
+      checksum: computeSha256(doc.content),
+      ingestionStage: 'indexed',
+      embeddingModel: embCfg.model,
+      embeddingDimension: embCfg.expectedDimension,
       summary: doc.summary,
       wordCount: words,
       chunkCount: pieces.length,
@@ -471,6 +655,10 @@ Northbridge Vault provides FIPS 140-3 Level 4 hardware key custody strictly isol
         docTitle: doc.title,
         category: doc.category,
         sectionTitle: piece.sectionTitle,
+        headingPath: piece.headingPath,
+        pageNumber: piece.pageNumber,
+        tokenCount: piece.tokenCount,
+        isAtomicFact: piece.isAtomicFact,
         chunkIndex: idx,
         content: piece.content,
       });
@@ -1735,13 +1923,141 @@ class SalesStore {
       }
     }
 
+    if (!this.state.preferencesByUser) {
+      this.state.preferencesByUser = {};
+      changed = true;
+    }
+
+    // Backfill v0.5 governance metadata on legacy docs/chunks
+    const embCfg = getEmbeddingConfig();
+    for (const doc of this.state.knowledgeDocs) {
+      if (!doc.approvalStatus) {
+        doc.approvalStatus = 'approved';
+        changed = true;
+      }
+      if (!doc.sensitivity) {
+        doc.sensitivity = 'internal';
+        changed = true;
+      }
+      if (!doc.ingestionStage) {
+        doc.ingestionStage = doc.status === 'indexed' ? 'indexed' : 'chunked';
+        changed = true;
+      }
+      if (!doc.embeddingModel) {
+        doc.embeddingModel = embCfg.model;
+        doc.embeddingDimension = embCfg.expectedDimension;
+        changed = true;
+      }
+    }
+    for (const chunk of this.state.knowledgeChunks) {
+      if (typeof chunk.tokenCount !== 'number') {
+        chunk.tokenCount = estimateTokens(chunk.content);
+        changed = true;
+      }
+    }
+
+    // Enforce privacy-first transcript retention on startup (never retain indefinitely)
+    const purged = this.enforceTranscriptRetention(Date.now(), false);
+    if (purged > 0) {
+      changed = true;
+    }
+
     if (changed) {
       this.save();
     }
   }
 
+  private getEffectiveRetentionDays(organisationId: string): number {
+    let envDays = 0;
+    try {
+      envDays = getTranscriptRetentionDays();
+    } catch {
+      envDays = 0;
+    }
+    const org = this.state.organisations.find((o) => o.id === organisationId);
+    const orgDays = typeof org?.settings?.retentionDays === 'number' ? org.settings.retentionDays : envDays;
+    // Environment TRANSCRIPT_RETENTION_DAYS acts as a strict upper privacy ceiling
+    return Math.max(0, Math.min(365, Math.min(envDays, orgDays)));
+  }
+
+  /**
+   * Enforces privacy-first transcript retention:
+   * - Effective days === 0: purges raw transcripts from all completed meetings immediately (ephemeral mode).
+   * - Effective days 1..365: purges raw transcripts from completed meetings older than N days.
+   * Preserves structured conversationState, executiveSummary, insights, and signals.
+   */
+  enforceTranscriptRetention(nowMs = Date.now(), persistIfChanged = true): number {
+    let purgedMeetings = 0;
+    for (const meeting of this.state.meetings) {
+      if (!meeting.transcript || meeting.transcript.length === 0) continue;
+      if (meeting.status !== 'completed') continue;
+
+      const effectiveDays = this.getEffectiveRetentionDays(meeting.organisationId);
+      const refIso = meeting.endedAt || meeting.startedAt;
+      const refMs = Date.parse(refIso);
+      const ageMs = Number.isFinite(refMs) ? Math.max(0, nowMs - refMs) : Infinity;
+
+      if (effectiveDays === 0 || ageMs >= effectiveDays * 24 * 60 * 60 * 1000) {
+        meeting.transcript = [];
+        purgedMeetings += 1;
+      }
+    }
+
+    if (purgedMeetings > 0) {
+      logger.info(
+        'Retention',
+        `Purged raw transcripts from ${purgedMeetings} completed meeting(s) under privacy retention policy.`,
+      );
+      if (persistIfChanged) {
+        this.save();
+      }
+    }
+    return purgedMeetings;
+  }
+
   save(): void {
-    fs.writeFileSync(STORE_PATH, JSON.stringify(this.state, null, 2), 'utf-8');
+    // When effective retention is 0 days (ephemeral), NEVER persist raw transcripts to disk.
+    const serializedState: StoreState = {
+      ...this.state,
+      meetings: this.state.meetings.map((m) => {
+        const effectiveDays = this.getEffectiveRetentionDays(m.organisationId);
+        if (effectiveDays === 0 && m.transcript.length > 0) {
+          return { ...m, transcript: [] };
+        }
+        return m;
+      }),
+    };
+    fs.writeFileSync(STORE_PATH, JSON.stringify(serializedState, null, 2), 'utf-8');
+  }
+
+  getPreferences(userKey: string): CopilotPreferences {
+    const existing = this.state.preferencesByUser?.[userKey];
+    if (existing) return existing;
+    return {
+      density: 'standard',
+      hudPosition: 'bottom-right',
+      hudOpacity: 96,
+      showSourcesExpanded: false,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  updatePreferences(
+    userKey: string,
+    patch: Partial<CopilotPreferences>,
+  ): CopilotPreferences {
+    if (!this.state.preferencesByUser) {
+      this.state.preferencesByUser = {};
+    }
+    const current = this.getPreferences(userKey);
+    const updated: CopilotPreferences = {
+      ...current,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+    this.state.preferencesByUser[userKey] = updated;
+    this.save();
+    return updated;
   }
 
   resetMeeting(meetingId: string, orgId: string): MeetingSession | null {
@@ -1764,6 +2080,7 @@ class SalesStore {
     meeting.suppressedDuplicatesCount = 0;
     meeting.zoomLink = undefined;
     meeting.executiveSummary = undefined;
+    meeting.conversationState = undefined;
     for (const q of meeting.qualification) {
       q.covered = false;
       q.evidence = undefined;
@@ -2078,26 +2395,80 @@ class SalesStore {
     };
   }
 
-  async ensureChunkEmbeddings(): Promise<void> {
-    if (this.indexingInFlight) return;
-    const unembedded = this.state.knowledgeChunks.filter(
-      (c) => !c.embedding || c.embedding.length === 0,
-    );
-    if (unembedded.length === 0) return;
+  async ensureChunkEmbeddings(options?: {
+    forceReindex?: boolean;
+    organisationId?: string;
+  }): Promise<{
+    totalTargeted: number;
+    embeddedCount: number;
+    embeddingProvider: 'huggingface_local';
+    embeddingModel: string;
+    embeddingDimension: number;
+  }> {
+    const embCfg = getEmbeddingConfig();
+    if (this.indexingInFlight) {
+      return {
+        totalTargeted: 0,
+        embeddedCount: 0,
+        embeddingProvider: embCfg.provider,
+        embeddingModel: embCfg.model,
+        embeddingDimension: embCfg.expectedDimension,
+      };
+    }
+
+    const candidates = this.state.knowledgeChunks.filter((c) => {
+      if (options?.organisationId && c.organisationId !== options.organisationId) return false;
+      if (options?.forceReindex) return true;
+      return (
+        !c.embedding ||
+        c.embedding.length === 0 ||
+        c.embeddingModel !== embCfg.model
+      );
+    });
+
+    if (candidates.length === 0) {
+      return {
+        totalTargeted: 0,
+        embeddedCount: 0,
+        embeddingProvider: embCfg.provider,
+        embeddingModel: embCfg.model,
+        embeddingDimension: embCfg.expectedDimension,
+      };
+    }
 
     this.indexingInFlight = true;
+    let embeddedCount = 0;
     try {
-      const vectors = await salesAI.embedTexts(unembedded.map((c) => `${c.docTitle}\n${c.content}`));
-      if (vectors.length === 0) return;
-      unembedded.forEach((chunk, idx) => {
-        if (vectors[idx] && vectors[idx].length > 0) {
-          chunk.embedding = vectors[idx];
-        }
-      });
+      const vectors = await salesAI.embedTexts(
+        candidates.map(
+          (c) => `${c.docTitle}${c.headingPath ? ` — ${c.headingPath}` : ''}\n${c.content}`,
+        ),
+        'document',
+      );
+      if (vectors.length > 0) {
+        candidates.forEach((chunk, idx) => {
+          if (vectors[idx] && vectors[idx].length > 0) {
+            chunk.embedding = vectors[idx];
+            chunk.embeddingModel = embCfg.model;
+            chunk.embeddingDimension = vectors[idx].length;
+            embeddedCount += 1;
+          }
+        });
+      }
       for (const doc of this.state.knowledgeDocs) {
+        if (options?.organisationId && doc.organisationId !== options.organisationId) continue;
         const docChunks = this.state.knowledgeChunks.filter((c) => c.docId === doc.id);
-        doc.indexedWithEmbeddings =
-          docChunks.length > 0 && docChunks.every((c) => c.embedding && c.embedding.length > 0);
+        const allValid =
+          docChunks.length > 0 &&
+          docChunks.every(
+            (c) => c.embedding && c.embedding.length > 0 && c.embeddingModel === embCfg.model,
+          );
+        doc.indexedWithEmbeddings = allValid;
+        doc.embeddingModel = embCfg.model;
+        doc.embeddingDimension =
+          docChunks.find((c) => c.embeddingDimension)?.embeddingDimension ||
+          embCfg.expectedDimension;
+        doc.ingestionStage = 'indexed';
       }
       this.save();
     } catch {
@@ -2105,32 +2476,53 @@ class SalesStore {
     } finally {
       this.indexingInFlight = false;
     }
+
+    return {
+      totalTargeted: candidates.length,
+      embeddedCount,
+      embeddingProvider: embCfg.provider,
+      embeddingModel: embCfg.model,
+      embeddingDimension: embCfg.expectedDimension,
+    };
   }
 
   async searchKnowledge(
     organisationId: string,
     query: string,
-    topK = 4,
+    topK = 5,
+    options?: { includeDrafts?: boolean },
   ): Promise<RagSearchResult[]> {
-    // Tenant & active-status filter BEFORE vector retrieval (per documentation.md §6.4 & §9.3)
-    const activeDocIds = new Set(
-      this.state.knowledgeDocs
-        .filter((d) => d.organisationId === organisationId && d.status === 'indexed')
-        .map((d) => d.id),
-    );
+    const embCfg = getEmbeddingConfig();
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const includeDrafts = Boolean(options?.includeDrafts);
+
+    // 1. Metadata filter BEFORE retrieval (§5.8): tenant + indexed + approvalStatus + validUntil
+    const docMap = new Map<string, KnowledgeDoc>();
+    for (const d of this.state.knowledgeDocs) {
+      if (d.organisationId !== organisationId || d.status !== 'indexed') continue;
+      const approval = d.approvalStatus || 'approved';
+      if (approval === 'rejected' || approval === 'expired') continue;
+      if (!includeDrafts && approval !== 'approved') continue;
+      if (d.validUntil && d.validUntil < todayIso && !includeDrafts) continue;
+      docMap.set(d.id, d);
+    }
+
     const scopedChunks = this.state.knowledgeChunks.filter(
-      (c) => c.organisationId === organisationId && activeDocIds.has(c.docId),
+      (c) => c.organisationId === organisationId && docMap.has(c.docId),
     );
     if (scopedChunks.length === 0) return [];
 
+    // 2. Embed query locally via Hugging Face only if compatible vectors for the active model exist (§2.3 / §5.7 guard)
     let queryEmbedding: number[] | null = null;
-    const anyEmbedded = scopedChunks.some((c) => c.embedding && c.embedding.length > 0);
-    if (anyEmbedded) {
+    const anyCompatibleEmbedded = scopedChunks.some(
+      (c) => c.embedding && c.embedding.length > 0 && c.embeddingModel === embCfg.model,
+    );
+    if (anyCompatibleEmbedded) {
       try {
         const res = await Promise.race([
-          salesAI.embedTexts([query]),
+          salesAI.embedTexts([query], 'query'),
           new Promise<number[][]>((_, reject) =>
-            setTimeout(() => reject(new Error('Embed timeout')), 4000),
+            setTimeout(() => reject(new Error('Embed timeout')), 15000),
           ),
         ]);
         if (res[0] && res[0].length > 0) {
@@ -2141,25 +2533,71 @@ class SalesStore {
       }
     }
 
-    const scored = scopedChunks.map((chunk) => {
-      const lex = lexicalScore(query, `${chunk.docTitle} ${chunk.sectionTitle || ''} ${chunk.content}`);
-      const vec =
-        queryEmbedding && chunk.embedding && chunk.embedding.length === queryEmbedding.length
-          ? cosineSimilarity(queryEmbedding, chunk.embedding)
-          : 0;
-      const combined = queryEmbedding && chunk.embedding ? vec * 0.78 + lex * 0.22 : lex;
-      return {
-        chunkId: chunk.id,
-        docId: chunk.docId,
-        docTitle: chunk.docTitle,
-        category: chunk.category,
-        sectionTitle: chunk.sectionTitle,
-        content: chunk.content,
-        score: Number(combined.toFixed(4)),
-      };
-    });
+    // 3. First-pass hybrid recall (top 12)
+    const recalled = scopedChunks
+      .map((chunk) => {
+        const doc = docMap.get(chunk.docId)!;
+        const lex = lexicalScore(
+          query,
+          `${chunk.docTitle} ${chunk.sectionTitle || ''} ${chunk.content}`,
+          chunk.headingPath || chunk.sectionTitle || '',
+        );
+        const compatibleVec =
+          Boolean(queryEmbedding) &&
+          Boolean(chunk.embedding) &&
+          chunk.embeddingModel === embCfg.model &&
+          chunk.embedding!.length === queryEmbedding!.length;
+        const vec = compatibleVec ? cosineSimilarity(queryEmbedding!, chunk.embedding!) : 0;
+        const recallScore = compatibleVec ? vec * 0.72 + lex * 0.28 : lex;
+        return { chunk, doc, lex, vec, compatibleVec, recallScore };
+      })
+      .sort((a, b) => b.recallScore - a.recallScore)
+      .slice(0, 12);
 
-    return scored.sort((a, b) => b.score - a.score).slice(0, topK);
+    // 4. Rerank top 12 -> topK with exact-entity boost, atomic fact boost, and per-doc diversity
+    const queryLower = query.toLowerCase();
+    const reranked = recalled
+      .map((item) => {
+        let boost = 0;
+        if (item.chunk.isAtomicFact) boost += 0.04;
+        if (item.doc.approvalStatus === 'approved') boost += 0.03;
+        if (
+          item.chunk.headingPath &&
+          queryLower.split(/\s+/).some((w) => w.length > 3 && item.chunk.headingPath!.toLowerCase().includes(w))
+        ) {
+          boost += 0.06;
+        }
+        const finalScore = Math.min(1, item.recallScore + boost);
+        return { ...item, finalScore };
+      })
+      .sort((a, b) => b.finalScore - a.finalScore);
+
+    // Deduplicate excessive chunks from same document (max 2 per doc unless corpus is tiny)
+    const perDocCounts = new Map<string, number>();
+    const finalResults: RagSearchResult[] = [];
+    for (const item of reranked) {
+      if (finalResults.length >= topK) break;
+      const count = perDocCounts.get(item.doc.id) || 0;
+      if (count >= 2 && reranked.length > topK) continue;
+      perDocCounts.set(item.doc.id, count + 1);
+      finalResults.push({
+        chunkId: item.chunk.id,
+        docId: item.chunk.docId,
+        docTitle: item.chunk.docTitle,
+        category: item.chunk.category,
+        sectionTitle: item.chunk.sectionTitle,
+        headingPath: item.chunk.headingPath,
+        pageNumber: item.chunk.pageNumber,
+        tokenCount: item.chunk.tokenCount,
+        approvalStatus: item.doc.approvalStatus || 'approved',
+        version: item.doc.version,
+        embeddingModel: item.compatibleVec ? item.chunk.embeddingModel : undefined,
+        content: item.chunk.content,
+        score: Number(item.finalScore.toFixed(4)),
+      });
+    }
+
+    return finalResults;
   }
 }
 

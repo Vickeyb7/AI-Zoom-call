@@ -27,6 +27,7 @@ import type { AudioCaptureMode, LiveAudioCaptureState } from '../hooks/useLiveAu
 import type {
   Battlecard,
   DetectedSignalStatus,
+  DisplayDensity,
   FeedbackRating,
   MeetingSession,
   SalesInsight,
@@ -47,6 +48,8 @@ interface CornerCopilotHudProps {
   onCopyText: (text: string, label?: string) => void;
   onOpenAudioSettings: () => void;
   onClose: () => void;
+  density?: DisplayDensity;
+  onChangeDensity?: (density: DisplayDensity) => void;
 }
 
 const CORNER_CLASSES: Record<HudCorner, string> = {
@@ -100,6 +103,8 @@ export const CornerCopilotHud: React.FC<CornerCopilotHudProps> = ({
   onCopyText,
   onOpenAudioSettings,
   onClose,
+  density = 'standard',
+  onChangeDensity,
 }) => {
   const [corner, setCorner] = React.useState<HudCorner>('bottom-right');
   const [minimized, setMinimized] = React.useState(false);
@@ -275,6 +280,25 @@ export const CornerCopilotHud: React.FC<CornerCopilotHudProps> = ({
             </div>
           )}
 
+          {onChangeDensity && (
+            <button
+              type="button"
+              onClick={() =>
+                onChangeDensity(
+                  density === 'compact'
+                    ? 'standard'
+                    : density === 'standard'
+                    ? 'expanded'
+                    : 'compact',
+                )
+              }
+              title={`Display density: ${density} (click to cycle)`}
+              className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[9.5px] font-mono uppercase text-slate-200"
+            >
+              {density === 'compact' ? 'C' : density === 'standard' ? 'S' : 'E'}
+            </button>
+          )}
+
           <button
             type="button"
             onClick={cycleCorner}
@@ -348,17 +372,27 @@ export const CornerCopilotHud: React.FC<CornerCopilotHudProps> = ({
               );
             })()}
 
-            {currentInsight.competitorName && weaknesses && weaknesses.length > 0 && (
-              <div className="rounded-md bg-[#FFFBEB] border border-[#FDE68A] p-2 space-y-0.5">
-                <div className="text-[9px] font-bold uppercase tracking-wider text-[#92400E] flex items-center gap-1">
-                  <ShieldAlert className="w-3 h-3 text-amber-600" />
-                  {currentInsight.competitorName} Weaknesses
+            {density !== 'compact' &&
+              currentInsight.competitorName &&
+              weaknesses &&
+              weaknesses.length > 0 && (
+                <div className="rounded-md bg-[#FFFBEB] border border-[#FDE68A] p-2 space-y-0.5">
+                  <div className="text-[9px] font-bold uppercase tracking-wider text-[#92400E] flex items-center gap-1">
+                    <ShieldAlert className="w-3 h-3 text-amber-600" />
+                    {currentInsight.competitorName} Weaknesses
+                  </div>
+                  <ul className="space-y-0.5 text-[10.5px] text-amber-950 list-disc pl-3.5 leading-snug">
+                    {weaknesses.slice(0, density === 'expanded' ? 3 : 2).map((w, idx) => (
+                      <li key={idx}>{w}</li>
+                    ))}
+                  </ul>
                 </div>
-                <ul className="space-y-0.5 text-[10.5px] text-amber-950 list-disc pl-3.5 leading-snug">
-                  {weaknesses.slice(0, 2).map((w, idx) => (
-                    <li key={idx}>{w}</li>
-                  ))}
-                </ul>
+              )}
+
+            {density === 'expanded' && currentInsight.underlyingConcern && (
+              <div className="text-[10.5px] text-slate-700 leading-snug">
+                <span className="font-semibold text-slate-900">Concern: </span>
+                {currentInsight.underlyingConcern}
               </div>
             )}
 
@@ -385,7 +419,7 @@ export const CornerCopilotHud: React.FC<CornerCopilotHudProps> = ({
               )}
             </div>
 
-            {currentInsight.discoveryQuestion && (
+            {density !== 'compact' && currentInsight.discoveryQuestion && (
               <div className="flex items-start gap-1.5 rounded-md bg-slate-50 border border-slate-200 p-1.5 text-[10.5px] text-slate-800">
                 <Lightbulb className="w-3 h-3 text-sky-600 shrink-0 mt-0.5" />
                 <div>
@@ -403,7 +437,7 @@ export const CornerCopilotHud: React.FC<CornerCopilotHudProps> = ({
               >
                 <BookOpen className="w-3 h-3" />
                 Sources ({currentInsight.supportingSources.length})
-                {showSources ? (
+                {showSources || density === 'expanded' ? (
                   <ChevronUp className="w-3 h-3" />
                 ) : (
                   <ChevronDown className="w-3 h-3" />
@@ -451,7 +485,7 @@ export const CornerCopilotHud: React.FC<CornerCopilotHudProps> = ({
               </div>
             </div>
 
-            {showSources && (
+            {(showSources || density === 'expanded') && (
               <div className="space-y-1">
                 {currentInsight.supportingSources.map((src, idx) => (
                   <div
@@ -459,6 +493,9 @@ export const CornerCopilotHud: React.FC<CornerCopilotHudProps> = ({
                     className="rounded border border-slate-200 bg-slate-50 p-1.5 text-[10px]"
                   >
                     <div className="font-semibold text-slate-800">{src.title}</div>
+                    {density === 'expanded' && src.excerpt && (
+                      <div className="text-slate-600 mt-0.5 line-clamp-2">{src.excerpt}</div>
+                    )}
                   </div>
                 ))}
               </div>

@@ -2,6 +2,7 @@ import { extractText } from 'unpdf';
 import type {
   Battlecard,
   CertaintyLevel,
+  ConversationState,
   InsightCategory,
   KnowledgeChunk,
   MeetingSession,
@@ -9,6 +10,9 @@ import type {
   TranscriptTurn,
 } from '../src/types/sales.ts';
 import type { DeterministicSignalMatch } from './signals.ts';
+import { generateEmbeddings, getEmbeddingConfig } from './embeddings.ts';
+import { getSttConfig, transcribeWithDeepgram } from './stt.ts';
+import { logger, validateLogLevel, type LogLevel } from './logger.ts';
 
 export interface TurnAnalysisOutput {
   shouldRecommend: boolean;
@@ -56,7 +60,7 @@ export interface GeneratedBattlecardOutput {
 }
 
 export interface SalesAIProvider {
-  embedTexts(texts: string[]): Promise<number[][]>;
+  embedTexts(texts: string[], kind?: 'query' | 'document'): Promise<number[][]>;
   extractPdfText(base64Data: string): Promise<string>;
   transcribeAudio(params: { buffer: Buffer; mimeType: string }): Promise<string>;
   analyzeTurn(params: {
@@ -68,6 +72,7 @@ export interface SalesAIProvider {
     relevantBattlecard?: Battlecard;
     qualificationFields: string[];
     abstentionEnabled: boolean;
+    conversationState?: ConversationState;
   }): Promise<TurnAnalysisOutput>;
   generateBattlecard(params: {
     competitorName: string;
@@ -76,28 +81,154 @@ export interface SalesAIProvider {
   generateMeetingSummary(meeting: MeetingSession): Promise<MeetingSummaryOutput>;
 }
 
-const GROQ_API_BASE = 'https://api.groq.com/openai/v1';
+function sanitizeModelId(raw: string | undefined, fallback: string): string {
+  const cleaned = raw?.trim();
+  if (!cleaned || /\s/.test(cleaned)) {
+    return fallback;
+  }
+  return cleaned;
+}
+
+function getGroqBaseUrl(): string {
+  return (process.env.GROQ_BASE_URL?.trim() || 'https://api.groq.com/openai/v1').replace(/\/+$/, '');
+}
 
 function getGroqApiKey(): string {
   const apiKey = process.env.GROQ_API_KEY?.trim();
   if (!apiKey) {
-    throw new Error('GROQ_API_KEY is not configured. Add it to Settings > Secrets or .env.');
+    throw new Error('GROQ_API_KEY is required for Groq LLM inference. Configure it in .env or Secrets.');
   }
   return apiKey;
 }
 
-function getChatModels(): string[] {
-  const configured = process.env.GROQ_MODEL?.trim();
-  const defaults = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b'];
-  if (!configured) return defaults;
-  return [configured, ...defaults.filter((m) => m !== configured)];
+export interface MissingEnvVarNotice {
+  name: string;
+  purpose: string;
 }
 
-function getTranscribeModels(): string[] {
-  const configured = process.env.GROQ_TRANSCRIBE_MODEL?.trim();
-  const defaults = ['whisper-large-v3-turbo', 'whisper-large-v3'];
-  if (!configured) return defaults;
-  return [configured, ...defaults.filter((m) => m !== configured)];
+export interface ValidatedAiEnvironment {
+  llmProvider: 'groq';
+  llmModel: string;
+  fastModel: string;
+  groqBaseUrl: string;
+  groqConfigured: boolean;
+  embeddingProvider: 'huggingface_local';
+  embeddingModel: string;
+  embeddingDevice: string;
+  embeddingDimension: number;
+  embeddingBatchSize: number;
+  embeddingNormalize: boolean;
+  hfTokenOptional: true;
+  sttProvider: 'deepgram';
+  sttModel: string;
+  deepgramConfigured: boolean;
+  transcriptRetentionDays: number;
+  transcriptRetentionMode: 'ephemeral_zero_disk_persistence' | 'finite_auto_purge';
+  logLevel: LogLevel;
+  missingRequiredEnvVars: MissingEnvVarNotice[];
+}
+
+export function getTranscriptRetentionDays(): number {
+  const raw = (process.env.TRANSCRIPT_RETENTION_DAYS ?? '0').trim();
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(
+      `Invalid TRANSCRIPT_RETENTION_DAYS="${process.env.TRANSCRIPT_RETENTION_DAYS}". Expected an integer between 0 and 365 (0 = ephemeral / never persist raw transcripts to disk).`,
+    );
+  }
+  const days = Number.parseInt(raw, 10);
+  if (!Number.isFinite(days) || days < 0 || days > 365) {
+    throw new Error(
+      `Invalid TRANSCRIPT_RETENTION_DAYS="${raw}". Must be between 0 and 365 days; indefinite retention is not permitted.`,
+    );
+  }
+  return days;
+}
+
+/**
+ * Validates the backend AI, STT, privacy retention, and logging environment:
+ * - Groq ONLY for LLM reasoning (LLM_PROVIDER=groq, openai/gpt-oss-120b)
+ * - Local Hugging Face ONLY for embeddings (EMBEDDING_PROVIDER=huggingface_local, BAAI/bge-m3)
+ * - Deepgram for speech-to-text (DEEPGRAM_API_KEY required)
+ * - Privacy-first TRANSCRIPT_RETENTION_DAYS (0 = ephemeral / no disk persistence; 1-365 = finite auto-purge)
+ * - LOG_LEVEL (DEBUG | INFO | WARN | ERROR)
+ */
+export function validateAiEnvironment(): ValidatedAiEnvironment {
+  const rawLlmProvider = (process.env.LLM_PROVIDER || 'groq').trim().toLowerCase();
+  if (rawLlmProvider !== 'groq') {
+    throw new Error(
+      `Invalid LLM_PROVIDER="${process.env.LLM_PROVIDER}". Only "groq" is supported as the LLM inference provider.`,
+    );
+  }
+
+  const groqBaseUrl = getGroqBaseUrl();
+  try {
+    const parsed = new URL(groqBaseUrl);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      throw new Error('non-http protocol');
+    }
+  } catch {
+    throw new Error(
+      `Invalid GROQ_BASE_URL="${groqBaseUrl}". Expected "https://api.groq.com/openai/v1".`,
+    );
+  }
+
+  const llmModel = sanitizeModelId(process.env.GROQ_MODEL, 'openai/gpt-oss-120b');
+  const fastModel = sanitizeModelId(process.env.GROQ_FAST_MODEL, 'openai/gpt-oss-20b');
+  const emb = getEmbeddingConfig();
+  const stt = getSttConfig();
+  const transcriptRetentionDays = getTranscriptRetentionDays();
+  const logLevel = validateLogLevel();
+
+  const groqConfigured = Boolean(process.env.GROQ_API_KEY?.trim());
+  const missingRequiredEnvVars: MissingEnvVarNotice[] = [];
+  if (!groqConfigured) {
+    missingRequiredEnvVars.push({
+      name: 'GROQ_API_KEY',
+      purpose: 'Required for Groq LLM reasoning (openai/gpt-oss-120b)',
+    });
+  }
+  if (!stt.apiKeyConfigured) {
+    missingRequiredEnvVars.push({
+      name: 'DEEPGRAM_API_KEY',
+      purpose: 'Required for Deepgram speech-to-text (nova-3)',
+    });
+  }
+
+  return {
+    llmProvider: 'groq',
+    llmModel,
+    fastModel,
+    groqBaseUrl,
+    groqConfigured,
+    embeddingProvider: emb.provider,
+    embeddingModel: emb.model,
+    embeddingDevice: emb.device,
+    embeddingDimension: emb.expectedDimension,
+    embeddingBatchSize: emb.batchSize,
+    embeddingNormalize: emb.normalize,
+    hfTokenOptional: true,
+    sttProvider: stt.provider,
+    sttModel: stt.model,
+    deepgramConfigured: stt.apiKeyConfigured,
+    transcriptRetentionDays,
+    transcriptRetentionMode:
+      transcriptRetentionDays === 0 ? 'ephemeral_zero_disk_persistence' : 'finite_auto_purge',
+    logLevel,
+    missingRequiredEnvVars,
+  };
+}
+
+export function getAiRuntimeInfo(): ValidatedAiEnvironment {
+  return validateAiEnvironment();
+}
+
+function getGroqChatModels(preferFast = false): string[] {
+  const configured = sanitizeModelId(process.env.GROQ_MODEL, 'openai/gpt-oss-120b');
+  const fastConfigured = sanitizeModelId(process.env.GROQ_FAST_MODEL, 'openai/gpt-oss-20b');
+  const defaults = preferFast
+    ? [fastConfigured, configured, 'openai/gpt-oss-120b', 'llama-3.3-70b-versatile']
+    : [configured, 'openai/gpt-oss-120b', fastConfigured, 'llama-3.3-70b-versatile'];
+  return Array.from(new Set(defaults));
 }
 
 function extractApiError(err: unknown): string {
@@ -126,7 +257,7 @@ function parseJsonPayload<T>(raw: string): T {
 
 async function withModelFallbackRetry<T>(
   fn: (model: string, signal: AbortSignal) => Promise<T>,
-  models = getChatModels(),
+  models = getGroqChatModels(),
   attemptTimeoutMs = 25000,
 ): Promise<T> {
   let lastErr: unknown;
@@ -183,18 +314,31 @@ async function withModelFallbackRetry<T>(
   throw lastErr;
 }
 
-async function groqChatJson<T>(params: {
+/**
+ * Groq-only chat completion adapter. All LLM reasoning calls route exclusively here.
+ */
+async function llmChatJson<T>(params: {
   systemPrompt: string;
   userPrompt: string;
   temperature?: number;
   maxTokens?: number;
   timeoutMs?: number;
+  preferFast?: boolean;
 }): Promise<T> {
+  const rawProvider = (process.env.LLM_PROVIDER || 'groq').trim().toLowerCase();
+  if (rawProvider !== 'groq') {
+    throw new Error(
+      `Unsupported LLM_PROVIDER="${process.env.LLM_PROVIDER}". Groq is the only permitted LLM inference provider.`,
+    );
+  }
+
+  const baseUrl = getGroqBaseUrl();
   const apiKey = getGroqApiKey();
 
   return withModelFallbackRetry(
     async (model, signal) => {
-      const res = await fetch(`${GROQ_API_BASE}/chat/completions`, {
+      const t0 = Date.now();
+      const res = await fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -213,6 +357,8 @@ async function groqChatJson<T>(params: {
         }),
       });
 
+      const requestId =
+        res.headers.get('x-request-id') || res.headers.get('x-groq-request-id') || 'n/a';
       const bodyText = await res.text();
       if (!res.ok) {
         let errMessage = `Groq HTTP ${res.status}`;
@@ -229,31 +375,27 @@ async function groqChatJson<T>(params: {
 
       const data = JSON.parse(bodyText) as {
         choices?: { message?: { content?: string } }[];
+        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
       };
       const content = data.choices?.[0]?.message?.content;
       if (!content) {
         throw new Error('Groq returned an empty response body.');
       }
+      const usageStr = data.usage
+        ? `tokens=${data.usage.prompt_tokens ?? '?'}/${data.usage.completion_tokens ?? '?'} (total=${data.usage.total_tokens ?? '?'})`
+        : 'tokens=n/a';
+      logger.info('Groq', `model=${model} reqId=${requestId} latency=${Date.now() - t0}ms ${usageStr}`);
       return parseJsonPayload<T>(content);
     },
-    getChatModels(),
+    getGroqChatModels(params.preferFast),
     params.timeoutMs ?? 25000,
   );
 }
 
-function extensionForMime(cleanMime: string): string {
-  if (cleanMime.includes('wav')) return 'wav';
-  if (cleanMime.includes('ogg')) return 'ogg';
-  if (cleanMime.includes('mp4') || cleanMime.includes('m4a')) return 'm4a';
-  if (cleanMime.includes('mpeg') || cleanMime.includes('mp3')) return 'mp3';
-  if (cleanMime.includes('flac')) return 'flac';
-  return 'webm';
-}
-
 export class GroqSalesProvider implements SalesAIProvider {
-  async embedTexts(_texts: string[]): Promise<number[][]> {
-    // Groq does not host a text embedding endpoint; knowledge retrieval uses tenant-scoped lexical ranking.
-    return [];
+  async embedTexts(texts: string[], kind: 'query' | 'document' = 'document'): Promise<number[][]> {
+    const result = await generateEmbeddings(texts, kind);
+    return result.vectors;
   }
 
   async extractPdfText(base64Data: string): Promise<string> {
@@ -267,81 +409,7 @@ export class GroqSalesProvider implements SalesAIProvider {
   }
 
   async transcribeAudio(params: { buffer: Buffer; mimeType: string }): Promise<string> {
-    const cleanMime = params.mimeType.split(';')[0].trim() || 'audio/webm';
-
-    // Fast deterministic silence check for uncompressed 16-bit PCM WAV buffers
-    if (cleanMime === 'audio/wav' && params.buffer.length > 44) {
-      let maxAbs = 0;
-      for (let i = 44; i + 1 < params.buffer.length; i += 2) {
-        const sample = Math.abs(params.buffer.readInt16LE(i));
-        if (sample > maxAbs) maxAbs = sample;
-        if (maxAbs > 180) break;
-      }
-      if (maxAbs <= 180) {
-        return '';
-      }
-    }
-
-    const apiKey = getGroqApiKey();
-    const ext = extensionForMime(cleanMime);
-
-    const parsed = await withModelFallbackRetry(
-      async (model, signal) => {
-        const form = new FormData();
-        form.append('file', new Blob([new Uint8Array(params.buffer)], { type: cleanMime }), `clip.${ext}`);
-        form.append('model', model);
-        form.append('response_format', 'verbose_json');
-        form.append('temperature', '0');
-
-        const res = await fetch(`${GROQ_API_BASE}/audio/transcriptions`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${apiKey}` },
-          signal,
-          body: form,
-        });
-
-        const bodyText = await res.text();
-        if (!res.ok) {
-          throw new Error(`Groq Whisper HTTP ${res.status}: ${bodyText.slice(0, 200)}`);
-        }
-
-        return JSON.parse(bodyText) as {
-          text?: string;
-          duration?: number;
-          segments?: { text?: string; no_speech_prob?: number; avg_logprob?: number }[];
-        };
-      },
-      getTranscribeModels(),
-      20000,
-    );
-
-    const segments = Array.isArray(parsed.segments) ? parsed.segments : [];
-    if (segments.length > 0) {
-      const avgNoSpeech =
-        segments.reduce((sum, s) => sum + (s.no_speech_prob ?? 0), 0) / segments.length;
-      const avgLogProb =
-        segments.reduce((sum, s) => sum + (s.avg_logprob ?? 0), 0) / segments.length;
-      if (avgNoSpeech > 0.72 || avgLogProb < -1.15) {
-        return '';
-      }
-    }
-
-    const raw = (parsed.text ?? '').trim();
-    const normalized = raw.toLowerCase();
-    if (
-      !raw ||
-      normalized === '""' ||
-      normalized === "''" ||
-      normalized.includes('[silence]') ||
-      normalized.includes('[inaudible]') ||
-      normalized.includes('(silence)') ||
-      normalized.includes('(no speech)') ||
-      normalized.includes('[no speech]') ||
-      normalized.includes('[blank_audio]')
-    ) {
-      return '';
-    }
-    return raw.replace(/^["']|["']$/g, '').trim();
+    return transcribeWithDeepgram(params);
   }
 
   async analyzeTurn(params: {
@@ -353,11 +421,35 @@ export class GroqSalesProvider implements SalesAIProvider {
     relevantBattlecard?: Battlecard;
     qualificationFields: string[];
     abstentionEnabled: boolean;
+    conversationState?: ConversationState;
   }): Promise<TurnAnalysisOutput> {
     const recentWindow = params.meeting.transcript
       .slice(-8)
       .map((t) => `[${t.timestamp}] ${t.speaker} (${t.speakerName}): ${t.text}`)
       .join('\n');
+
+    const stateSummary = params.conversationState
+      ? JSON.stringify(
+          {
+            currentVendor: params.conversationState.currentVendor || null,
+            currentWorkflow: params.conversationState.currentWorkflow || null,
+            confirmedPainPoints: params.conversationState.confirmedPainPoints.slice(0, 4),
+            possiblePainPoints: params.conversationState.possiblePainPoints.slice(0, 3),
+            desiredOutcomes: params.conversationState.desiredOutcomes.slice(0, 4),
+            activeObjections: params.conversationState.objections
+              .filter((o) => o.status !== 'resolved')
+              .slice(0, 4)
+              .map((o) => `${o.category}: ${o.summary}`),
+            buyingSignals: params.conversationState.buyingSignals.slice(0, 4),
+            budgetStatus: params.conversationState.budgetStatus,
+            timelineStatus: params.conversationState.timelineStatus,
+            decisionProcessStatus: params.conversationState.decisionProcessStatus,
+            discoveryGaps: params.conversationState.discoveryGaps.slice(0, 4),
+          },
+          null,
+          2,
+        )
+      : 'None yet';
 
     const alreadyShownTitles = params.meeting.insights
       .slice(0, 6)
@@ -369,7 +461,7 @@ export class GroqSalesProvider implements SalesAIProvider {
         ? params.retrievedChunks
             .map(
               (c) =>
-                `[documentId="${c.docId}" | title="${c.docTitle}" | section="${c.sectionTitle || c.category}"]\n${c.content.slice(0, 750)}`,
+                `[documentId="${c.docId}" | title="${c.docTitle}" | section="${c.headingPath || c.sectionTitle || c.category}"]\n${c.content.slice(0, 750)}`,
             )
             .join('\n\n')
         : 'NONE — No matching approved documents were retrieved for this utterance.';
@@ -437,6 +529,9 @@ CRITICAL SAFETY & GROUNDING RULES:
 - Primary Competitor: ${params.meeting.primaryCompetitor}
 - Qualification Fields Tracked: ${params.qualificationFields.join(', ')}
 
+Structured Conversation State (compact deal memory):
+${stateSummary}
+
 Deterministic Pre-Signals:
 - Matched Competitors: ${params.deterministicSignals.matchedCompetitors.map((m) => m.canonicalName).join(', ') || 'None'}
 - Baseline Objection Hint: ${params.deterministicSignals.likelyObjectionCategory || 'None'}
@@ -462,7 +557,7 @@ ${battlecardContext}
 Keep every text field crisp (1-2 short sentences max) so an Account Executive can scan the card in 3-5 seconds. Return JSON only.`;
 
     try {
-      const parsed = await groqChatJson<TurnAnalysisOutput>({
+      const parsed = await llmChatJson<TurnAnalysisOutput>({
         systemPrompt,
         userPrompt,
         temperature: 0.2,
@@ -513,7 +608,7 @@ Keep every text field crisp (1-2 short sentences max) so an Account Executive ca
         ? params.contextChunks.map((c) => `[${c.docTitle}]\n${c.content}`).join('\n\n')
         : 'No competitor-specific documents found in Knowledge Base. Clearly note prohibited/unverified claims.';
 
-    const parsed = await groqChatJson<Partial<GeneratedBattlecardOutput>>({
+    const parsed = await llmChatJson<Partial<GeneratedBattlecardOutput>>({
       systemPrompt: `You are a competitive intelligence strategist. Return strictly valid JSON with keys:
 {
   "tagline": string,
@@ -552,7 +647,7 @@ Ground all claims strictly in the provided knowledge chunks. Never fabricate com
       .map((t) => `[${t.timestamp}] ${t.speaker} (${t.speakerName}): ${t.text}`)
       .join('\n');
 
-    const parsed = await groqChatJson<Partial<MeetingSummaryOutput>>({
+    const parsed = await llmChatJson<Partial<MeetingSummaryOutput>>({
       systemPrompt: `You are an enterprise sales executive assistant. Return strictly valid JSON with keys:
 {
   "facts": string[],

@@ -132,6 +132,7 @@ export async function generateAndRankRecommendations(params: {
     relevantBattlecard: battlecard,
     qualificationFields: org.settings.qualificationFramework,
     abstentionEnabled: org.settings.abstentionEnabled,
+    conversationState: context.conversationState,
   });
 
   // Abort cleanly if meeting was reset while AI analysis was in flight

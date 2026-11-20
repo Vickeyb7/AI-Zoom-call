@@ -1,5 +1,5 @@
 import React from 'react';
-import { Building2, PictureInPicture2, Plus, Radio, X } from 'lucide-react';
+import { Building2, Loader2, PictureInPicture2, Plus, Radio, X } from 'lucide-react';
 import { Sidebar, type NavTab } from './components/Sidebar';
 import { DashboardView } from './components/DashboardView';
 import { LiveCopilotView } from './components/LiveCopilotView';
@@ -11,12 +11,16 @@ import { RiskDrawer } from './components/RiskDrawer';
 import { DesktopHUDView } from './components/DesktopHUDView';
 import { CornerCopilotHud } from './components/CornerCopilotHud';
 import { ZoomConnectModal } from './components/ZoomConnectModal';
+import { LoginGate } from './components/LoginGate';
+import { useAuth } from './components/FirebaseAuthProvider';
 import { useLiveAudioCapture } from './hooks/useLiveAudioCapture';
 import type {
   AuditEvent,
   Battlecard,
+  CopilotPreferences,
   DashboardData,
   DealStage,
+  DisplayDensity,
   FeedbackRating,
   KnowledgeDoc,
   MeetingSession,
@@ -42,7 +46,22 @@ interface OrgContextResponse {
   auditEvents: AuditEvent[];
 }
 
-export function App() {
+interface AuthenticatedWorkspaceProps {
+  googleUser: {
+    uid: string;
+    name: string;
+    email: string;
+    photoURL?: string;
+  };
+  idToken: string | null;
+  onSignOut: () => Promise<void>;
+}
+
+function AuthenticatedWorkspace({
+  googleUser,
+  idToken,
+  onSignOut,
+}: AuthenticatedWorkspaceProps) {
   const [activeTab, setActiveTab] = React.useState<NavTab>('copilot');
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
 
@@ -80,6 +99,20 @@ export function App() {
   const [zoomModalOpen, setZoomModalOpen] = React.useState(false);
   const [newMeetingModalOpen, setNewMeetingModalOpen] = React.useState(false);
   const [toast, setToast] = React.useState<string | null>(null);
+  const [preferences, setPreferences] = React.useState<CopilotPreferences>(() => {
+    try {
+      const saved = window.localStorage.getItem('ais_copilot_preferences');
+      if (saved) return JSON.parse(saved) as CopilotPreferences;
+    } catch {
+      // Ignore storage errors
+    }
+    return {
+      density: 'standard',
+      hudPosition: 'bottom-right',
+      hudOpacity: 96,
+      showSourcesExpanded: false,
+    };
+  });
 
   // New Meeting Form State
   const [newAccount, setNewAccount] = React.useState('');
@@ -98,8 +131,11 @@ export function App() {
     () => ({
       'x-org-id': activeOrgId,
       ...(currentUser ? { 'x-user-id': currentUser.id } : {}),
+      ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+      ...(googleUser.email ? { 'x-auth-email': googleUser.email } : {}),
+      ...(googleUser.name ? { 'x-auth-name': googleUser.name } : {}),
     }),
-    [activeOrgId, currentUser],
+    [activeOrgId, currentUser, idToken, googleUser.email, googleUser.name],
   );
 
   const showToast = React.useCallback((msg: string) => {
@@ -166,6 +202,50 @@ export function App() {
     setLoading(true);
     void fetchAllData();
   }, [fetchAllData]);
+
+  // Load persisted user preferences from backend
+  React.useEffect(() => {
+    let active = true;
+    fetch('/api/preferences', { headers: apiHeaders })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: CopilotPreferences | null) => {
+        if (!active || !data) return;
+        setPreferences(data);
+        try {
+          window.localStorage.setItem('ais_copilot_preferences', JSON.stringify(data));
+        } catch {
+          // Ignore storage errors
+        }
+      })
+      .catch(() => {
+        // Non-fatal
+      });
+    return () => {
+      active = false;
+    };
+  }, [apiHeaders]);
+
+  const handleChangeDensity = React.useCallback(
+    (density: DisplayDensity) => {
+      setPreferences((prev) => {
+        const next: CopilotPreferences = { ...prev, density };
+        try {
+          window.localStorage.setItem('ais_copilot_preferences', JSON.stringify(next));
+        } catch {
+          // Ignore
+        }
+        return next;
+      });
+      void fetch('/api/preferences', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...apiHeaders },
+        body: JSON.stringify({ density }),
+      }).catch(() => {
+        // Non-fatal
+      });
+    },
+    [apiHeaders],
+  );
 
   // WebSocket Connection & Auto-Reconnect
   React.useEffect(() => {
@@ -509,6 +589,8 @@ export function App() {
         onOpenMeeting={handleOpenMeetingInCopilot}
         organisation={currentOrg}
         currentUser={currentUser}
+        googleUser={googleUser}
+        onSignOut={() => void onSignOut()}
       />
 
       <div className="flex-1 min-w-0 flex flex-col">
@@ -678,6 +760,8 @@ export function App() {
               audioState={audioState}
               onStopAudioCapture={stopCapture}
               onCopyText={handleCopyText}
+              density={preferences.density}
+              onChangeDensity={handleChangeDensity}
             />
           )}
 
@@ -954,6 +1038,8 @@ export function App() {
         onCopyText={handleCopyText}
         onOpenAudioSettings={() => setZoomModalOpen(true)}
         onClose={() => setCornerHudOpen(false)}
+        density={preferences.density}
+        onChangeDensity={handleChangeDensity}
       />
 
       {/* Non-blocking Toast */}
@@ -967,6 +1053,40 @@ export function App() {
         </div>
       )}
     </div>
+  );
+}
+
+export function App() {
+  const { user, authReady, idToken, signOut } = useAuth();
+
+  if (!authReady) {
+    return (
+      <div className="min-h-screen bg-[#F8FAFC] flex items-center justify-center p-6">
+        <div className="flex items-center gap-2.5 text-sm font-medium text-slate-600">
+          <Loader2 className="w-4 h-4 animate-spin text-[#4F46E5]" />
+          <span>Verifying Google session...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LoginGate />;
+  }
+
+  const googleUser = {
+    uid: user.uid,
+    name: user.displayName || user.email?.split('@')[0] || 'Workspace User',
+    email: user.email || '',
+    photoURL: user.photoURL || undefined,
+  };
+
+  return (
+    <AuthenticatedWorkspace
+      googleUser={googleUser}
+      idToken={idToken}
+      onSignOut={signOut}
+    />
   );
 }
 

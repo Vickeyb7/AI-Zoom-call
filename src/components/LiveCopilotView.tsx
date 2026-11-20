@@ -36,6 +36,7 @@ import type { LiveAudioCaptureState } from '../hooks/useLiveAudioCapture';
 import type {
   Battlecard,
   DetectedSignalStatus,
+  DisplayDensity,
   FeedbackRating,
   InsightCategory,
   MeetingSession,
@@ -64,6 +65,8 @@ interface LiveCopilotViewProps {
   audioState: LiveAudioCaptureState;
   onStopAudioCapture: () => void;
   onCopyText: (text: string, label?: string) => void;
+  density: DisplayDensity;
+  onChangeDensity: (density: DisplayDensity) => void;
 }
 
 interface SimScenario {
@@ -375,13 +378,15 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
   audioState,
   onStopAudioCapture,
   onCopyText,
+  density,
+  onChangeDensity,
 }) => {
   const [speaker, setSpeaker] = React.useState<SpeakerRole>('Prospect');
   const [speakerName, setSpeakerName] = React.useState('');
   const [utterance, setUtterance] = React.useState('');
-  const [rightTab, setRightTab] = React.useState<'recommendations' | 'qualification' | 'notes'>(
-    'recommendations',
-  );
+  const [rightTab, setRightTab] = React.useState<
+    'recommendations' | 'deal_state' | 'qualification' | 'notes'
+  >('recommendations');
   const [scratchInput, setScratchInput] = React.useState('');
   const [showTimeline, setShowTimeline] = React.useState(true);
   const [viewMode, setViewMode] = React.useState<'workspace' | 'zoom'>('workspace');
@@ -1227,22 +1232,33 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
         {/* RIGHT SECTION — AI Sales Recommendations (5 Cols) */}
         <section className="lg:col-span-5 eki-card rounded-lg flex flex-col lg:h-[calc(100vh-230px)] min-h-[540px]">
           <div className="px-4 py-2.5 border-b border-slate-200 bg-white flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-1 p-0.5 bg-slate-100 rounded-md">
+            <div className="flex items-center gap-1 p-0.5 bg-slate-100 rounded-md overflow-x-auto">
               <button
                 type="button"
                 onClick={() => setRightTab('recommendations')}
-                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors whitespace-nowrap ${
+                className={`px-2 py-1 rounded text-xs font-medium transition-colors whitespace-nowrap ${
                   rightTab === 'recommendations'
                     ? 'bg-white text-slate-900 shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                AI Recommendations ({activeInsights.length})
+                AI Tips ({activeInsights.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setRightTab('deal_state')}
+                className={`px-2 py-1 rounded text-xs font-medium transition-colors whitespace-nowrap ${
+                  rightTab === 'deal_state'
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Deal State
               </button>
               <button
                 type="button"
                 onClick={() => setRightTab('qualification')}
-                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors whitespace-nowrap ${
+                className={`px-2 py-1 rounded text-xs font-medium transition-colors whitespace-nowrap ${
                   rightTab === 'qualification'
                     ? 'bg-white text-slate-900 shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
@@ -1254,7 +1270,7 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
               <button
                 type="button"
                 onClick={() => setRightTab('notes')}
-                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors whitespace-nowrap ${
+                className={`px-2 py-1 rounded text-xs font-medium transition-colors whitespace-nowrap ${
                   rightTab === 'notes'
                     ? 'bg-white text-slate-900 shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
@@ -1264,16 +1280,37 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
               </button>
             </div>
 
-            {analyzing ? (
-              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[#4F46E5]">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                Retrieving &amp; Refining...
-              </span>
-            ) : (
-              <span className="text-[11px] text-slate-500">
-                Auto-triggered on signals
-              </span>
-            )}
+            <div className="flex items-center gap-2 shrink-0">
+              {rightTab === 'recommendations' && (
+                <div
+                  className="flex items-center p-0.5 bg-slate-100 rounded-md border border-slate-200/80"
+                  role="group"
+                  aria-label="Recommendation display density"
+                >
+                  {(['compact', 'standard', 'expanded'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => onChangeDensity(mode)}
+                      className={`px-2 py-0.5 rounded text-[10.5px] font-medium capitalize transition-colors ${
+                        density === mode
+                          ? 'bg-white text-[#4338CA] shadow-sm'
+                          : 'text-slate-500 hover:text-slate-800'
+                      }`}
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {analyzing && (
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#4F46E5]">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Refining...
+                </span>
+              )}
+            </div>
           </div>
 
           {copilotError && (
@@ -1335,7 +1372,7 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
                         </div>
                       </div>
 
-                      <div className="p-3.5 space-y-2.5">
+                      <div className={density === 'compact' ? 'p-3 space-y-2' : 'p-3.5 space-y-2.5'}>
                         {/* Title + Evolving Statement Count */}
                         <div className="flex items-start justify-between gap-2">
                           <h3 className="text-[14px] font-semibold text-slate-900 leading-snug">
@@ -1349,30 +1386,37 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
                           )}
                         </div>
 
-                        {/* Evolving Trigger Excerpts */}
-                        {ins.contextHistory && ins.contextHistory.length > 0 && (
-                          <div className="text-[11px] text-slate-500 space-y-0.5">
-                            {ins.contextHistory.map((ctx, cIdx) => (
-                              <div key={cIdx} className="truncate">
-                                <span className="font-mono text-slate-400 mr-1.5">
-                                  {ctx.timestamp}
-                                </span>
-                                &ldquo;{ctx.excerpt}&rdquo;
-                              </div>
-                            ))}
+                        {/* Evolving Trigger Excerpts (Standard & Expanded) */}
+                        {density !== 'compact' &&
+                          ins.contextHistory &&
+                          ins.contextHistory.length > 0 && (
+                            <div className="text-[11px] text-slate-500 space-y-0.5">
+                              {ins.contextHistory
+                                .slice(density === 'expanded' ? 0 : -2)
+                                .map((ctx, cIdx) => (
+                                  <div key={cIdx} className={density === 'expanded' ? '' : 'truncate'}>
+                                    <span className="font-mono text-slate-400 mr-1.5">
+                                      {ctx.timestamp}
+                                    </span>
+                                    &ldquo;{ctx.excerpt}&rdquo;
+                                  </div>
+                                ))}
+                            </div>
+                          )}
+
+                        {/* 2. What the prospect may actually be concerned about */}
+                        {density !== 'compact' && (
+                          <div className="text-xs text-slate-700 leading-relaxed">
+                            <span className="font-semibold text-slate-900">
+                              Underlying Concern:{' '}
+                            </span>
+                            {ins.underlyingConcern || ins.interpretation}
                           </div>
                         )}
 
-                        {/* 2. What the prospect may actually be concerned about */}
-                        <div className="text-xs text-slate-700 leading-relaxed">
-                          <span className="font-semibold text-slate-900">
-                            Underlying Concern:{' '}
-                          </span>
-                          {ins.underlyingConcern || ins.interpretation}
-                        </div>
-
                         {/* Verified Competitor Weaknesses Strip (when battlecard matched) */}
-                        {ins.competitorName &&
+                        {density !== 'compact' &&
+                          ins.competitorName &&
                           ins.competitorWeaknesses &&
                           ins.competitorWeaknesses.length > 0 && (
                             <div className="rounded-md bg-[#FFFBEB] border border-[#FDE68A] p-2.5 space-y-1">
@@ -1381,9 +1425,11 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
                                 <span>{ins.competitorName} Weaknesses (Verified Battlecard)</span>
                               </div>
                               <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-amber-950 leading-snug">
-                                {ins.competitorWeaknesses.slice(0, 2).map((w, wIdx) => (
-                                  <li key={wIdx}>{w}</li>
-                                ))}
+                                {ins.competitorWeaknesses
+                                  .slice(0, density === 'expanded' ? 3 : 2)
+                                  .map((w, wIdx) => (
+                                    <li key={wIdx}>{w}</li>
+                                  ))}
                               </ul>
                             </div>
                           )}
@@ -1414,10 +1460,17 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
                               &ldquo;{ins.suggestedResponse}&rdquo;
                             </div>
                           )}
+
+                          {density === 'expanded' && ins.differentiator && (
+                            <div className="pt-1.5 border-t border-slate-200/80 text-xs text-slate-700 leading-relaxed">
+                              <span className="font-semibold text-emerald-700">Differentiator: </span>
+                              {ins.differentiator}
+                            </div>
+                          )}
                         </div>
 
                         {/* 5. Contextual Discovery Question */}
-                        {ins.discoveryQuestion && (
+                        {density !== 'compact' && ins.discoveryQuestion && (
                           <div className="flex items-start gap-2 text-xs text-slate-800 bg-[#EFF6FF]/60 border border-[#DBEAFE] rounded-md p-2.5">
                             <Lightbulb className="w-3.5 h-3.5 text-[#0284C7] shrink-0 mt-0.5" />
                             <div>
@@ -1428,34 +1481,37 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
                         )}
 
                         {/* 6 & 7. Supporting Evidence & Retrieval Transparency */}
-                        <div className="pt-1 flex flex-wrap items-center justify-between gap-2 text-[11px]">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setExpandedEvidence((prev) => ({
-                                ...prev,
-                                [ins.id]: !prev[ins.id],
-                              }))
-                            }
-                            className="inline-flex items-center gap-1 font-medium text-[#4F46E5] hover:underline"
-                          >
-                            <BookOpen className="w-3.5 h-3.5" />
-                            View Supporting Evidence ({ins.supportingSources.length})
-                            {evidenceOpen ? (
-                              <ChevronUp className="w-3 h-3" />
-                            ) : (
-                              <ChevronDown className="w-3 h-3" />
-                            )}
-                          </button>
+                        {density !== 'compact' && (
+                          <div className="pt-1 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setExpandedEvidence((prev) => ({
+                                  ...prev,
+                                  [ins.id]: !prev[ins.id],
+                                }))
+                              }
+                              className="inline-flex items-center gap-1 font-medium text-[#4F46E5] hover:underline"
+                            >
+                              <BookOpen className="w-3.5 h-3.5" />
+                              View Supporting Evidence ({ins.supportingSources.length})
+                              {evidenceOpen || density === 'expanded' ? (
+                                <ChevronUp className="w-3 h-3" />
+                              ) : (
+                                <ChevronDown className="w-3 h-3" />
+                              )}
+                            </button>
 
-                          <span className="font-mono text-[10px] text-slate-500">
-                            {ins.retrievalMode === 'hybrid_rag_embeddings'
-                              ? 'Embedding RAG'
-                              : 'Mock KB Lexical Retrieval'}
-                          </span>
-                        </div>
+                            <span className="font-mono text-[10px] text-slate-500">
+                              {ins.retrievalMode === 'hybrid_rag_embeddings'
+                                ? 'Hugging Face Hybrid RAG'
+                                : 'Tenant Lexical RAG'}
+                              {ins.latencyMs ? ` · ${ins.latencyMs}ms` : ''}
+                            </span>
+                          </div>
+                        )}
 
-                        {evidenceOpen && (
+                        {(evidenceOpen || density === 'expanded') && (
                           <div className="space-y-1.5 pt-1">
                             {ins.supportingSources.length === 0 ? (
                               <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">
@@ -1534,6 +1590,141 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
                   );
                 })
               )}
+            </div>
+          )}
+
+          {rightTab === 'deal_state' && (
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-[#F8FAFC]/40">
+              <div className="text-xs text-slate-500">
+                Structured Conversation State updated continuously from transcript turns and injected into LLM reasoning.
+              </div>
+              {(() => {
+                const cs = selectedMeeting.conversationState;
+                if (!cs) {
+                  return (
+                    <div className="rounded-lg border border-slate-200 bg-white p-6 text-center text-xs text-slate-500 space-y-1.5">
+                      <div className="font-semibold text-slate-800">No Conversation State Captured Yet</div>
+                      <p>
+                        Start the simulation or live audio capture to build structured deal memory (incumbent vendor, confirmed pain points, objections, and discovery gaps).
+                      </p>
+                    </div>
+                  );
+                }
+
+                const statusClass = (s: 'unknown' | 'discussed' | 'confirmed') =>
+                  s === 'confirmed'
+                    ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                    : s === 'discussed'
+                    ? 'text-amber-800 bg-amber-50 border-amber-200'
+                    : 'text-slate-500 bg-slate-50 border-slate-200';
+
+                return (
+                  <div className="space-y-3">
+                    <div className="rounded-md border border-slate-200 bg-white p-3 space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-500">Incumbent / Competitor</span>
+                        <span className="font-semibold text-slate-900">
+                          {cs.currentVendor || selectedMeeting.primaryCompetitor || 'Unidentified'}
+                        </span>
+                      </div>
+                      {cs.currentWorkflow && (
+                        <div className="text-[11px] text-slate-600 border-t border-slate-100 pt-2">
+                          <span className="font-semibold text-slate-800">Current Workflow: </span>
+                          {cs.currentWorkflow}
+                        </div>
+                      )}
+                      <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-100 text-center">
+                        <div className={`rounded border px-2 py-1.5 ${statusClass(cs.budgetStatus)}`}>
+                          <div className="text-[10px] uppercase tracking-wider opacity-75">Budget</div>
+                          <div className="text-xs font-semibold capitalize">{cs.budgetStatus}</div>
+                        </div>
+                        <div className={`rounded border px-2 py-1.5 ${statusClass(cs.timelineStatus)}`}>
+                          <div className="text-[10px] uppercase tracking-wider opacity-75">Timeline</div>
+                          <div className="text-xs font-semibold capitalize">{cs.timelineStatus}</div>
+                        </div>
+                        <div className={`rounded border px-2 py-1.5 ${statusClass(cs.decisionProcessStatus)}`}>
+                          <div className="text-[10px] uppercase tracking-wider opacity-75">Decision</div>
+                          <div className="text-xs font-semibold capitalize">{cs.decisionProcessStatus}</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {cs.confirmedPainPoints.length > 0 && (
+                      <div className="rounded-md border border-slate-200 bg-white p-3 space-y-1.5">
+                        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                          Confirmed Pain Points ({cs.confirmedPainPoints.length})
+                        </div>
+                        <ul className="list-disc pl-4 space-y-1 text-xs text-slate-800">
+                          {cs.confirmedPainPoints.map((p, i) => (
+                            <li key={i}>{p}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {cs.objections.length > 0 && (
+                      <div className="rounded-md border border-slate-200 bg-white p-3 space-y-1.5">
+                        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                          Tracked Objections ({cs.objections.length})
+                        </div>
+                        <div className="space-y-1.5">
+                          {cs.objections.map((o, i) => (
+                            <div
+                              key={i}
+                              className="text-xs rounded border border-slate-200 bg-[#F8FAFC] p-2 space-y-0.5"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-semibold text-slate-900">{o.category}</span>
+                                <span className="font-mono text-[10px] uppercase text-slate-500">
+                                  {o.status}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-600">{o.summary}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {cs.desiredOutcomes.length > 0 && (
+                      <div className="rounded-md border border-slate-200 bg-white p-3 space-y-1.5">
+                        <div className="text-[11px] font-semibold uppercase tracking-wider text-emerald-700">
+                          Desired Outcomes
+                        </div>
+                        <ul className="list-disc pl-4 space-y-1 text-xs text-slate-800">
+                          {cs.desiredOutcomes.map((o, i) => (
+                            <li key={i}>{o}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {cs.discoveryGaps.length > 0 && (
+                      <div className="rounded-md border border-amber-200 bg-[#FFFBEB]/60 p-3 space-y-1.5">
+                        <div className="text-[11px] font-semibold uppercase tracking-wider text-amber-800">
+                          Open Discovery Gaps ({cs.discoveryGaps.length})
+                        </div>
+                        <div className="text-xs text-amber-950 leading-relaxed">
+                          {cs.discoveryGaps.join(' · ')}
+                        </div>
+                      </div>
+                    )}
+
+                    {cs.openQuestions.length > 0 && (
+                      <div className="rounded-md border border-slate-200 bg-white p-3 space-y-1.5">
+                        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                          Prospect Questions Raised
+                        </div>
+                        <ul className="list-disc pl-4 space-y-1 text-xs text-slate-700">
+                          {cs.openQuestions.map((q, i) => (
+                            <li key={i}>{q}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           )}
 

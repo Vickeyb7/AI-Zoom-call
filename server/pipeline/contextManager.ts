@@ -1,4 +1,5 @@
 import type {
+  ConversationState,
   MeetingSession,
   SalesInsight,
   SignalEvent,
@@ -10,6 +11,7 @@ export interface ConversationContextSnapshot {
   recentTurnsText: string;
   sessionCompetitors: string[];
   conversationBasis: string;
+  conversationState: ConversationState;
   activeLifecycles: {
     lifecycleId: string;
     category: string;
@@ -19,6 +21,168 @@ export interface ConversationContextSnapshot {
   matchedExistingSignal?: SignalEvent;
   isEvolvingLifecycle: boolean;
   resolvedInsightIds: string[];
+}
+
+function pushUnique(list: string[], item: string, maxItems = 8): void {
+  const clean = item.trim();
+  if (!clean) return;
+  const lower = clean.toLowerCase();
+  if (list.some((x) => x.toLowerCase() === lower)) return;
+  list.unshift(clean);
+  if (list.length > maxItems) list.length = maxItems;
+}
+
+function createInitialConversationState(meeting: MeetingSession): ConversationState {
+  return {
+    currentVendor:
+      meeting.primaryCompetitor && meeting.primaryCompetitor !== 'None'
+        ? meeting.primaryCompetitor
+        : undefined,
+    confirmedPainPoints: [],
+    possiblePainPoints: [],
+    desiredOutcomes: [],
+    objections: [],
+    buyingSignals: [],
+    stakeholders: [...meeting.prospectStakeholders],
+    budgetStatus: 'unknown',
+    timelineStatus: 'unknown',
+    decisionProcessStatus: 'unknown',
+    discoveryGaps: meeting.qualification
+      .filter((q) => !q.covered)
+      .map((q) => q.field),
+    openQuestions: [],
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function updateStructuredConversationState(params: {
+  meeting: MeetingSession;
+  latestTurn: TranscriptTurn;
+  signal: DetectedSignalResult;
+  sessionCompetitors: string[];
+}): ConversationState {
+  const { meeting, latestTurn, signal, sessionCompetitors } = params;
+  const state: ConversationState = meeting.conversationState
+    ? { ...meeting.conversationState }
+    : createInitialConversationState(meeting);
+
+  const text = latestTurn.text.trim();
+  const lower = text.toLowerCase();
+  const isProspect = latestTurn.speaker !== 'Sales Representative' && latestTurn.speaker !== 'AE';
+
+  // Vendor / incumbent detection
+  if (signal.matchedCompetitors.length > 0) {
+    state.currentVendor = signal.matchedCompetitors[0].canonicalName;
+  } else if (!state.currentVendor && sessionCompetitors.length > 0) {
+    state.currentVendor = sessionCompetitors[0];
+  }
+
+  // Current workflow capture
+  if (
+    isProspect &&
+    /\b(currently|right now|today we|our team uses|running on|pipeline|workflow|stack|ci\/cd|jenkins|github actions|gitlab)\b/i.test(
+      text,
+    )
+  ) {
+    state.currentWorkflow = text.slice(0, 140);
+  }
+
+  // Confirmed vs. possible pain points
+  if (isProspect) {
+    if (
+      /\b(flaky|slow|pain|bottleneck|broken|drops|manual|spending \d+|hours a week|queue|latency|stale|overhead|struggl|frustrat|fails)\b/i.test(
+        lower,
+      )
+    ) {
+      pushUnique(state.confirmedPainPoints, text.slice(0, 120), 6);
+    } else if (signal.isHesitationOrRisk) {
+      pushUnique(state.possiblePainPoints, text.slice(0, 120), 5);
+    }
+
+    // Desired outcomes
+    if (
+      /\b(need to|want to|goal is|looking for|trying to|hoping to|cut|reduce|improve|speed up|consolidat|automate)\b/i.test(
+        lower,
+      )
+    ) {
+      pushUnique(state.desiredOutcomes, text.slice(0, 120), 6);
+    }
+
+    // Budget / Timeline / Decision Process tracking
+    if (/\b(budget|price|cost|pricing|expensive|discount|spend|cfo|finance|roi|tco|quote)\b/i.test(lower)) {
+      state.budgetStatus = /\b(approved|allocated|have budget|signed off)\b/i.test(lower)
+        ? 'confirmed'
+        : 'discussed';
+    }
+    if (/\b(q1|q2|q3|q4|quarter|deadline|go[- ]live|timeline|this month|next month|renewal|freeze|by [a-z]+)\b/i.test(lower)) {
+      state.timelineStatus = /\b(target|must|by q|renewal is|go[- ]live on)\b/i.test(lower)
+        ? 'confirmed'
+        : 'discussed';
+    }
+    if (/\b(procurement|legal|infosec|security review|committee|vp|ciso|cto|sign[- ]off|approval|stakeholder|decision)\b/i.test(lower)) {
+      state.decisionProcessStatus = /\b(steps|final sign|procurement then|ciso signs)\b/i.test(lower)
+        ? 'confirmed'
+        : 'discussed';
+    }
+
+    // Buying signals
+    if (signal.isBuyingSignal) {
+      pushUnique(state.buyingSignals, text.slice(0, 120), 6);
+    }
+
+    // Open prospect questions
+    if (text.includes('?')) {
+      pushUnique(state.openQuestions, text.slice(0, 120), 5);
+    }
+
+    // Stakeholders mentioned or speaking
+    if (latestTurn.speakerName && !state.stakeholders.some((s) => s.toLowerCase().includes(latestTurn.speakerName.toLowerCase()))) {
+      state.stakeholders.push(latestTurn.speakerName);
+    }
+  }
+
+  // Objections sync
+  if (signal.objectionCategory && isProspect) {
+    const existingObj = state.objections.find(
+      (o) => o.category === signal.objectionCategory && o.status !== 'resolved',
+    );
+    if (existingObj) {
+      existingObj.summary = text.slice(0, 110);
+      existingObj.status = 'evolving';
+    } else {
+      state.objections.unshift({
+        category: signal.objectionCategory,
+        summary: text.slice(0, 110),
+        status: 'active',
+      });
+      if (state.objections.length > 8) state.objections.length = 8;
+    }
+  }
+  if (signal.isResolutionEvidence) {
+    for (const obj of state.objections) {
+      if (!signal.resolvedCategoryHint || obj.category === signal.resolvedCategoryHint) {
+        obj.status = 'resolved';
+      }
+    }
+  }
+
+  // Recompute discovery gaps from uncovered qualification fields + unknown B/T/D
+  const uncoveredQual = meeting.qualification.filter((q) => !q.covered).map((q) => q.field);
+  const gaps: string[] = [...uncoveredQual];
+  if (state.budgetStatus === 'unknown' && !gaps.some((g) => g.toLowerCase().includes('budget') || g.toLowerCase().includes('economic'))) {
+    gaps.push('Budget / Commercial Scope');
+  }
+  if (state.timelineStatus === 'unknown' && !gaps.some((g) => g.toLowerCase().includes('time'))) {
+    gaps.push('Target Timeline');
+  }
+  if (state.decisionProcessStatus === 'unknown' && !gaps.some((g) => g.toLowerCase().includes('decision'))) {
+    gaps.push('Decision Process');
+  }
+  state.discoveryGaps = gaps.slice(0, 7);
+  state.updatedAt = new Date().toISOString();
+
+  meeting.conversationState = state;
+  return state;
 }
 
 export function buildAndManageConversationContext(params: {
@@ -104,7 +268,15 @@ export function buildAndManageConversationContext(params: {
     pushComp(ins.competitorName);
   }
 
-  // 4. Build recent window & active lifecycle summaries
+  // 4. Update structured conversation state (§6.4)
+  const conversationState = updateStructuredConversationState({
+    meeting,
+    latestTurn,
+    signal,
+    sessionCompetitors: seenComps,
+  });
+
+  // 5. Build recent window & active lifecycle summaries
   const recentTurnsText = meeting.transcript
     .slice(-8)
     .map((t) => `[${t.timestamp}] ${t.speaker} (${t.speakerName}): ${t.text}`)
@@ -137,6 +309,7 @@ export function buildAndManageConversationContext(params: {
     recentTurnsText,
     sessionCompetitors: seenComps,
     conversationBasis: basisParts.join(' · '),
+    conversationState,
     activeLifecycles,
     matchedExistingInsight,
     matchedExistingSignal,

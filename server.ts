@@ -7,7 +7,10 @@ import multer from 'multer';
 import mammoth from 'mammoth';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createViteServer } from 'vite';
-import { salesAI } from './server/ai.ts';
+import { getAiRuntimeInfo, salesAI, validateAiEnvironment } from './server/ai.ts';
+import { getEmbeddingConfig } from './server/embeddings.ts';
+import { logger } from './server/logger.ts';
+import { MissingDeepgramKeyError } from './server/stt.ts';
 import {
   classifyZoomSpeaker,
   dispatchRecallBot,
@@ -18,12 +21,21 @@ import {
   verifyZoomWebhookSignature,
 } from './server/integrations/zoom.ts';
 import { runLiveIntelligencePipeline } from './server/pipeline/orchestrator.ts';
-import { chunkTextWithSections, extractPptxText, store } from './server/store.ts';
+import {
+  chunkTextWithSections,
+  computeSha256,
+  extractHtmlText,
+  extractPptxText,
+  store,
+} from './server/store.ts';
 import type {
   Battlecard,
+  CopilotPreferences,
   FeedbackRating,
+  KnowledgeApprovalStatus,
   KnowledgeCategory,
   KnowledgeDoc,
+  KnowledgeSensitivity,
   MeetingSession,
   Organisation,
   SpeakerRole,
@@ -51,14 +63,40 @@ function resolveRequestContext(req: express.Request): {
   const requestedOrgId = req.header('x-org-id') || 'org-acme';
   const org = state.organisations.find((o) => o.id === requestedOrgId) || state.organisations[0];
   const requestedUserId = req.header('x-user-id');
-  const user =
+  const baseUser =
     state.users.find((u) => u.id === requestedUserId && u.organisationId === org.id) ||
     state.users.find((u) => u.organisationId === org.id) ||
     state.users[0];
+
+  const authName = req.header('x-auth-name')?.trim();
+  const authEmail = req.header('x-auth-email')?.trim();
+  const user: UserProfile =
+    authName || authEmail
+      ? {
+          ...baseUser,
+          name: authName || baseUser.name,
+          email: authEmail || baseUser.email,
+        }
+      : baseUser;
+
   return { org, user };
 }
 
 async function startServer() {
+  const validatedAi = validateAiEnvironment();
+  logger.info(
+    'Startup',
+    `LLM=${validatedAi.llmProvider} (${validatedAi.llmModel}, fast=${validatedAi.fastModel}, base=${validatedAi.groqBaseUrl}) | Embeddings=${validatedAi.embeddingProvider} (${validatedAi.embeddingModel}, ${validatedAi.embeddingDimension}d, device=${validatedAi.embeddingDevice}) | STT=${validatedAi.sttProvider} (${validatedAi.sttModel}) | Retention=${validatedAi.transcriptRetentionDays}d (${validatedAi.transcriptRetentionMode}) | LogLevel=${validatedAi.logLevel}`,
+  );
+  if (validatedAi.missingRequiredEnvVars.length > 0) {
+    for (const missing of validatedAi.missingRequiredEnvVars) {
+      logger.warn(
+        'EnvValidation',
+        `Missing required environment variable ${missing.name}: ${missing.purpose}`,
+      );
+    }
+  }
+
   const app = express();
   app.use(
     express.json({
@@ -298,13 +336,44 @@ async function startServer() {
     });
   });
 
-  // Health & Org Context APIs
+  // Health, Runtime & User Preferences APIs
   app.get('/api/health', (_req, res) => {
+    const runtime = getAiRuntimeInfo();
     res.json({
       ok: true,
-      aiProvider: 'groq',
-      groqConfigured: Boolean(process.env.GROQ_API_KEY?.trim()),
+      aiProvider: runtime.llmProvider,
+      ...runtime,
     });
+  });
+
+  app.get('/api/preferences', (req, res) => {
+    const { org, user } = resolveRequestContext(req);
+    const key = `${org.id}::${user.email || user.id}`;
+    res.json(store.getPreferences(key));
+  });
+
+  app.put('/api/preferences', (req, res) => {
+    const { org, user } = resolveRequestContext(req);
+    const key = `${org.id}::${user.email || user.id}`;
+    const body = req.body as Partial<CopilotPreferences>;
+    const patch: Partial<CopilotPreferences> = {};
+    if (body.density === 'compact' || body.density === 'standard' || body.density === 'expanded') {
+      patch.density = body.density;
+    }
+    if (body.hudPosition === 'bottom-right' || body.hudPosition === 'bottom-left') {
+      patch.hudPosition = body.hudPosition;
+    }
+    if (typeof body.hudOpacity === 'number' && Number.isFinite(body.hudOpacity)) {
+      patch.hudOpacity = Math.max(60, Math.min(100, Math.round(body.hudOpacity)));
+    }
+    if (typeof body.showSourcesExpanded === 'boolean') {
+      patch.showSourcesExpanded = body.showSourcesExpanded;
+    }
+    if (typeof body.preferredDisplayId === 'number' || typeof body.preferredDisplayId === 'string') {
+      patch.preferredDisplayId = body.preferredDisplayId;
+    }
+    const updated = store.updatePreferences(key, patch);
+    res.json(updated);
   });
 
   app.get('/api/org/context', (req, res) => {
@@ -327,7 +396,8 @@ async function startServer() {
     }
     const body = req.body as Partial<Organisation['settings']>;
     if (typeof body.retentionDays === 'number') {
-      org.settings.retentionDays = Math.max(7, Math.min(365, body.retentionDays));
+      org.settings.retentionDays = Math.max(0, Math.min(365, Math.round(body.retentionDays)));
+      store.enforceTranscriptRetention();
     }
     if (typeof body.cooldownSeconds === 'number') {
       org.settings.cooldownSeconds = Math.max(5, Math.min(300, body.cooldownSeconds));
@@ -554,6 +624,17 @@ async function startServer() {
       const category = (req.body.category as KnowledgeCategory) || 'Product Documentation';
       const version = (req.body.version as string)?.trim() || 'v1.0';
       const reviewDate = (req.body.reviewDate as string)?.trim() || '2027-02-01';
+      const validUntil = (req.body.validUntil as string)?.trim() || reviewDate;
+      const rawApproval = (req.body.approvalStatus as string)?.trim() || 'approved';
+      const approvalStatus: KnowledgeApprovalStatus =
+        rawApproval === 'draft' || rawApproval === 'expired' || rawApproval === 'rejected'
+          ? rawApproval
+          : 'approved';
+      const rawSensitivity = (req.body.sensitivity as string)?.trim() || 'internal';
+      const sensitivity: KnowledgeSensitivity =
+        rawSensitivity === 'public' || rawSensitivity === 'confidential'
+          ? rawSensitivity
+          : 'internal';
       const ext = path.extname(file.originalname).toLowerCase().replace('.', '');
 
       let extractedText = '';
@@ -569,6 +650,9 @@ async function startServer() {
       } else if (ext === 'pptx') {
         fileType = 'pptx';
         extractedText = await extractPptxText(file.buffer);
+      } else if (ext === 'html' || ext === 'htm') {
+        fileType = 'html';
+        extractedText = extractHtmlText(file.buffer.toString('utf-8'));
       } else if (ext === 'md' || ext === 'markdown') {
         fileType = 'md';
         extractedText = file.buffer.toString('utf-8').trim();
@@ -577,7 +661,7 @@ async function startServer() {
         extractedText = file.buffer.toString('utf-8').trim();
       } else {
         res.status(400).json({
-          error: 'Unsupported file type. Upload PDF, DOCX, PPTX, MD, or TXT.',
+          error: 'Unsupported file type. Upload PDF, DOCX, PPTX, HTML, MD, or TXT.',
         });
         return;
       }
@@ -587,13 +671,32 @@ async function startServer() {
         return;
       }
 
+      // §5.3 SHA-256 deduplication check within organisation
+      const checksum = computeSha256(extractedText);
+      const duplicate = store
+        .getState()
+        .knowledgeDocs.find((d) => d.organisationId === org.id && d.checksum === checksum);
+      if (duplicate && req.body.allowDuplicate !== 'true') {
+        res.status(409).json({
+          error: `Identical content already indexed as "${duplicate.title}" (${duplicate.version}).`,
+          duplicateDocId: duplicate.id,
+        });
+        return;
+      }
+
+      const embCfg = getEmbeddingConfig();
       const docId = `doc-${Date.now()}`;
       const pieces = chunkTextWithSections(extractedText);
       let vectors: number[][] = [];
       let indexed = false;
 
       try {
-        vectors = await salesAI.embedTexts(pieces.map((p) => `${title}\n${p.content}`));
+        vectors = await salesAI.embedTexts(
+          pieces.map(
+            (p) => `${title}${p.headingPath ? ` — ${p.headingPath}` : ''}\n${p.content}`,
+          ),
+          'document',
+        );
         indexed = vectors.length === pieces.length && vectors.every((v) => v.length > 0);
       } catch {
         indexed = false;
@@ -610,6 +713,13 @@ async function startServer() {
         version,
         reviewDate,
         status: 'indexed',
+        approvalStatus,
+        validUntil,
+        sensitivity,
+        checksum,
+        ingestionStage: 'indexed',
+        embeddingModel: embCfg.model,
+        embeddingDimension: vectors[0]?.length || embCfg.expectedDimension,
         summary: extractedText.slice(0, 180).replace(/\s+/g, ' ') + '...',
         wordCount: extractedText.split(/\s+/).filter(Boolean).length,
         chunkCount: pieces.length,
@@ -628,9 +738,15 @@ async function startServer() {
           docTitle: title,
           category,
           sectionTitle: piece.sectionTitle,
+          headingPath: piece.headingPath,
+          pageNumber: piece.pageNumber,
+          tokenCount: piece.tokenCount,
+          isAtomicFact: piece.isAtomicFact,
           chunkIndex: idx,
           content: piece.content,
           embedding: vectors[idx],
+          embeddingModel: vectors[idx]?.length ? embCfg.model : undefined,
+          embeddingDimension: vectors[idx]?.length || undefined,
         });
       });
 
@@ -639,7 +755,7 @@ async function startServer() {
         actorName: user.name,
         actorRole: user.role,
         action: 'knowledge.uploaded',
-        resource: `${doc.title} (${doc.fileType.toUpperCase()}, ${doc.chunkCount} chunks)`,
+        resource: `${doc.title} (${doc.fileType.toUpperCase()}, ${doc.chunkCount} chunks, ${doc.approvalStatus})`,
       });
       store.save();
 
@@ -660,21 +776,49 @@ async function startServer() {
         content?: string;
         version?: string;
         reviewDate?: string;
-        fileType?: 'md' | 'txt';
+        validUntil?: string;
+        approvalStatus?: KnowledgeApprovalStatus;
+        sensitivity?: KnowledgeSensitivity;
+        fileType?: 'md' | 'txt' | 'html';
       };
       if (!body.title?.trim() || !body.content?.trim()) {
         res.status(400).json({ error: 'Title and document content are required' });
         return;
       }
 
+      const rawText =
+        body.fileType === 'html' ? extractHtmlText(body.content.trim()) : body.content.trim();
+      const checksum = computeSha256(rawText);
+      const duplicate = store
+        .getState()
+        .knowledgeDocs.find((d) => d.organisationId === org.id && d.checksum === checksum);
+      if (duplicate) {
+        res.status(409).json({
+          error: `Identical content already indexed as "${duplicate.title}" (${duplicate.version}).`,
+          duplicateDocId: duplicate.id,
+        });
+        return;
+      }
+
+      const embCfg = getEmbeddingConfig();
       const docId = `doc-${Date.now()}`;
       const category = body.category || 'Product Documentation';
-      const pieces = chunkTextWithSections(body.content.trim());
+      const approvalStatus: KnowledgeApprovalStatus = body.approvalStatus || 'approved';
+      const sensitivity: KnowledgeSensitivity = body.sensitivity || 'internal';
+      const reviewDate = body.reviewDate?.trim() || '2027-02-01';
+      const validUntil = body.validUntil?.trim() || reviewDate;
+
+      const pieces = chunkTextWithSections(rawText);
       let vectors: number[][] = [];
       let indexed = false;
 
       try {
-        vectors = await salesAI.embedTexts(pieces.map((p) => `${body.title}\n${p.content}`));
+        vectors = await salesAI.embedTexts(
+          pieces.map(
+            (p) => `${body.title}\n${p.headingPath ? `${p.headingPath}\n` : ''}${p.content}`,
+          ),
+          'document',
+        );
         indexed = vectors.length === pieces.length && vectors.every((v) => v.length > 0);
       } catch {
         indexed = false;
@@ -689,14 +833,21 @@ async function startServer() {
         category,
         owner: user.name,
         version: body.version?.trim() || 'v1.0',
-        reviewDate: body.reviewDate?.trim() || '2027-02-01',
+        reviewDate,
         status: 'indexed',
-        summary: body.content.trim().slice(0, 180).replace(/\s+/g, ' ') + '...',
-        wordCount: body.content.trim().split(/\s+/).filter(Boolean).length,
+        approvalStatus,
+        validUntil,
+        sensitivity,
+        checksum,
+        ingestionStage: 'indexed',
+        embeddingModel: embCfg.model,
+        embeddingDimension: vectors[0]?.length || embCfg.expectedDimension,
+        summary: rawText.slice(0, 180).replace(/\s+/g, ' ') + '...',
+        wordCount: rawText.split(/\s+/).filter(Boolean).length,
         chunkCount: pieces.length,
         indexedWithEmbeddings: indexed,
         uploadedAt: new Date().toISOString(),
-        contentPreview: body.content.trim().slice(0, 260),
+        contentPreview: rawText.slice(0, 260),
         sourceMode: 'uploaded_kb',
       };
 
@@ -709,9 +860,15 @@ async function startServer() {
           docTitle: doc.title,
           category,
           sectionTitle: piece.sectionTitle,
+          headingPath: piece.headingPath,
+          pageNumber: piece.pageNumber,
+          tokenCount: piece.tokenCount,
+          isAtomicFact: piece.isAtomicFact,
           chunkIndex: idx,
           content: piece.content,
           embedding: vectors[idx],
+          embeddingModel: vectors[idx]?.length ? embCfg.model : undefined,
+          embeddingDimension: vectors[idx]?.length || undefined,
         });
       });
 
@@ -720,7 +877,7 @@ async function startServer() {
         actorName: user.name,
         actorRole: user.role,
         action: 'knowledge.created',
-        resource: `${doc.title} (${doc.version})`,
+        resource: `${doc.title} (${doc.version}, ${doc.approvalStatus})`,
       });
       store.save();
 
@@ -756,6 +913,64 @@ async function startServer() {
     res.json(doc);
   });
 
+  app.patch('/api/knowledge/:id/approval', (req, res) => {
+    const { org, user } = resolveRequestContext(req);
+    const { approvalStatus, validUntil } = req.body as {
+      approvalStatus?: KnowledgeApprovalStatus;
+      validUntil?: string;
+    };
+    const doc = store
+      .getState()
+      .knowledgeDocs.find((d) => d.id === req.params.id && d.organisationId === org.id);
+    if (!doc) {
+      res.status(404).json({ error: 'Document not found' });
+      return;
+    }
+    if (
+      approvalStatus === 'approved' ||
+      approvalStatus === 'draft' ||
+      approvalStatus === 'expired' ||
+      approvalStatus === 'rejected'
+    ) {
+      doc.approvalStatus = approvalStatus;
+    }
+    if (typeof validUntil === 'string' && validUntil.trim()) {
+      doc.validUntil = validUntil.trim();
+    }
+    store.logAudit({
+      organisationId: org.id,
+      actorName: user.name,
+      actorRole: user.role,
+      action: 'knowledge.approval_updated',
+      resource: `${doc.title} -> ${doc.approvalStatus}${doc.validUntil ? ` (valid until ${doc.validUntil})` : ''}`,
+    });
+    store.save();
+    res.json(doc);
+  });
+
+  app.post('/api/knowledge/reindex', async (req, res) => {
+    const { org, user } = resolveRequestContext(req);
+    try {
+      const result = await store.ensureChunkEmbeddings({
+        forceReindex: true,
+        organisationId: org.id,
+      });
+      store.logAudit({
+        organisationId: org.id,
+        actorName: user.name,
+        actorRole: user.role,
+        action: 'knowledge.reindexed',
+        resource: `${result.embeddedCount}/${result.totalTargeted} chunks via ${result.embeddingModel} (${result.embeddingDimension}d)`,
+      });
+      store.save();
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Failed to re-index corpus embeddings',
+      });
+    }
+  });
+
   app.delete('/api/knowledge/:id', (req, res) => {
     const { org, user } = resolveRequestContext(req);
     const state = store.getState();
@@ -781,12 +996,18 @@ async function startServer() {
 
   app.post('/api/knowledge/search', async (req, res) => {
     const { org } = resolveRequestContext(req);
-    const { query, topK } = req.body as { query?: string; topK?: number };
+    const { query, topK, includeDrafts } = req.body as {
+      query?: string;
+      topK?: number;
+      includeDrafts?: boolean;
+    };
     if (!query?.trim()) {
       res.status(400).json({ error: 'Query is required' });
       return;
     }
-    const results = await store.searchKnowledge(org.id, query.trim(), topK || 5);
+    const results = await store.searchKnowledge(org.id, query.trim(), topK || 5, {
+      includeDrafts: Boolean(includeDrafts),
+    });
     res.json({ results });
   });
 
@@ -1252,6 +1473,14 @@ async function startServer() {
         meetingId: meeting.id,
       });
     } catch (err) {
+      if (err instanceof MissingDeepgramKeyError) {
+        res.status(503).json({
+          error: err.message,
+          missingEnvVar: 'DEEPGRAM_API_KEY',
+          sttProvider: 'deepgram',
+        });
+        return;
+      }
       res.status(500).json({
         error: err instanceof Error ? err.message : 'Audio transcription failed',
       });
@@ -1272,13 +1501,23 @@ async function startServer() {
     });
   }
 
+  // Periodic privacy-first transcript retention enforcement (never retain indefinitely)
+  const retentionSweep = setInterval(() => {
+    store.enforceTranscriptRetention();
+  }, 60 * 60 * 1000);
+  retentionSweep.unref();
+
   server.listen(PORT, '0.0.0.0', () => {
-    console.log(`AI Sales Strategist server listening on http://0.0.0.0:${PORT}`);
+    logger.info('Server', `AI Sales Strategist server listening on http://0.0.0.0:${PORT}`);
+    store.enforceTranscriptRetention();
     void store.ensureChunkEmbeddings();
   });
 }
 
 startServer().catch((err) => {
-  console.error('Failed to start AI Sales Strategist server:', err);
+  logger.error(
+    'Startup',
+    `Failed to start AI Sales Strategist server: ${err instanceof Error ? err.message : String(err)}`,
+  );
   process.exit(1);
 });
