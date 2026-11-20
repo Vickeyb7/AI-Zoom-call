@@ -1,0 +1,229 @@
+---
+name: Executive Kinetic Intelligence
+colors:
+  surface: '#faf8ff'
+  surface-dim: '#d2d9f4'
+  surface-bright: '#faf8ff'
+  surface-container-lowest: '#ffffff'
+  surface-container-low: '#f2f3ff'
+  surface-container: '#eaedff'
+  surface-container-high: '#e2e7ff'
+  surface-container-highest: '#dae2fd'
+  on-surface: '#131b2e'
+  on-surface-variant: '#464555'
+  inverse-surface: '#283044'
+  inverse-on-surface: '#eef0ff'
+  outline: '#777587'
+  outline-variant: '#c7c4d8'
+  surface-tint: '#4d44e3'
+  primary: '#3525cd'
+  on-primary: '#ffffff'
+  primary-container: '#4f46e5'
+  on-primary-container: '#dad7ff'
+  inverse-primary: '#c3c0ff'
+  secondary: '#006398'
+  on-secondary: '#ffffff'
+  secondary-container: '#5bb8fe'
+  on-secondary-container: '#00476e'
+  tertiary: '#005338'
+  on-tertiary: '#ffffff'
+  tertiary-container: '#006e4b'
+  on-tertiary-container: '#67f4b7'
+  error: '#ba1a1a'
+  on-error: '#ffffff'
+  error-container: '#ffdad6'
+  on-error-container: '#93000a'
+  primary-fixed: '#e2dfff'
+  primary-fixed-dim: '#c3c0ff'
+  on-primary-fixed: '#0f0069'
+  on-primary-fixed-variant: '#3323cc'
+  secondary-fixed: '#cce5ff'
+  secondary-fixed-dim: '#93ccff'
+  on-secondary-fixed: '#001d31'
+  on-secondary-fixed-variant: '#004b73'
+  tertiary-fixed: '#6ffbbe'
+  tertiary-fixed-dim: '#4edea3'
+  on-tertiary-fixed: '#002113'
+  on-tertiary-fixed-variant: '#005236'
+  background: '#faf8ff'
+  on-background: '#131b2e'
+  surface-variant: '#dae2fd'
+typography:
+  display-hero:
+    fontFamily: Plus Jakarta Sans
+    fontSize: 40px
+    fontWeight: '700'
+    lineHeight: 48px
+    letterSpacing: -0.03em
+  headline-xl:
+    fontFamily: Plus Jakarta Sans
+    fontSize: 30px
+    fontWeight: '600'
+    lineHeight: 38px
+    letterSpacing: -0.02em
+  headline-xl-mobile:
+    fontFamily: Plus Jakarta Sans
+    fontSize: 24px
+    fontWeight: '600'
+    lineHeight: 32px
+    letterSpacing: -0.02em
+  headline-lg:
+    fontFamily: Plus Jakarta Sans
+    fontSize: 22px
+    fontWeight: '600'
+    lineHeight: 28px
+    letterSpacing: -0.015em
+  headline-md:
+    fontFamily: Plus Jakarta Sans
+    fontSize: 18px
+    fontWeight: '600'
+    lineHeight: 24px
+    letterSpacing: -0.01em
+  headline-sm:
+    fontFamily: Plus Jakarta Sans
+    fontSize: 15px
+    fontWeight: '600'
+    lineHeight: 20px
+    letterSpacing: -0.005em
+  body-lg:
+    fontFamily: Inter
+    fontSize: 15px
+    fontWeight: '400'
+    lineHeight: 22px
+    letterSpacing: -0.005em
+  body-md:
+    fontFamily: Inter
+    fontSize: 13px
+    fontWeight: '400'
+    lineHeight: 18px
+    letterSpacing: 0em
+  body-sm:
+    fontFamily: Inter
+    fontSize: 12px
+    fontWeight: '400'
+    lineHeight: 16px
+    letterSpacing: 0.005em
+  label-md:
+    fontFamily: Inter
+    fontSize: 12px
+    fontWeight: '600'
+    lineHeight: 16px
+    letterSpacing: 0.01em
+  label-sm:
+    fontFamily: Inter
+    fontSize: 11px
+    fontWeight: '500'
+    lineHeight: 14px
+    letterSpacing: 0.02em
+  telemetry-micro:
+    fontFamily: Inter
+    fontSize: 10px
+    fontWeight: '700'
+    lineHeight: 12px
+    letterSpacing: 0.06em
+rounded:
+  sm: 0.125rem
+  DEFAULT: 0.25rem
+  md: 0.375rem
+  lg: 0.5rem
+  xl: 0.75rem
+  full: 9999px
+spacing:
+  gutter: 1rem
+  gutter-compact: 0.75rem
+  margin: 1.5rem
+  margin-mobile: 1rem
+  space-xs: 0.25rem
+  space-sm: 0.5rem
+  space-md: 0.75rem
+  space-lg: 1.25rem
+  space-xl: 2rem
+---
+
+## Brand & Style
+
+This design system targets high-velocity Enterprise Account Executives, Sales Leaders, and Deal Strategists engaged in high-stakes live enterprise negotiations. The brand personality balances ruthless operational clarity with forward-leaning AI acuity: authoritative, instantaneous, disciplined, and razor-sharp. 
+
+The aesthetic synthesizes high-density enterprise minimalism with tactical telemetry design. It pairs a deep, focused command rail (slate navy) against an ultra-refined, high-clarity daylight canvas (#F8FAFC) engineered to prevent cognitive overload during live multi-stakeholder calls. Interfaces prioritize structural density, hair-thin boundaries (1px subtle strokes), micro-badges, and deliberate typographic scaling over heavy ornament. AI actions feel kinetic, electric, and contextually aware without descending into gimmicky neon saturation.
+
+## Colors
+
+The system uses a calibrated dual-zone color model: a high-contrast dark navy structure (#0B1120 base, #0F172A elevated) for persistent navigation and session telemetry, paired with an illuminated light canvas (#F8FAFC) for dynamic battlecards, real-time transcript streams, and deal intelligence cards.
+
+### Functional Roles
+- **Primary (`#4F46E5` / `#6366F1`):** Represents AI synthesis, deal predictions, and algorithmic recommendations. Used for primary execution CTAs and active voice intelligence pulses.
+- **Secondary (`#0284C7` / `#2563EB`):** Signals live meeting runtime states, incoming transcript captures, and pipeline velocity telemetry.
+- **Tertiary & Semantic Signals:**
+  - **Positive / Live Deal (`#10B981`):** Buying signals, budget confirmation, green-light champion sentiment.
+  - **Warning / Competitor (`#F59E0B`):** Competitor mentions, pricing hesitation, objection triggers.
+  - **Critical / Risk (`#F43F5E`):** Churn indicators, blocker identification, authority misalignment.
+- **Neutrals:** Range from high-depth dark slate (`#0B1120`, `#0F172A`, `#1E293B`) through subtle grid lines (`#E2E8F0`, `#F1F5F9`) up to pure card surface white (`#FFFFFF`).
+
+## Typography
+
+Typography prioritizes rapid glanceability during active speaking intervals. Headings leverage Plus Jakarta Sans for its confident, geometric enterprise weight without visual clutter. Body narrative, dynamic transcript streaming, and data layers rely on Inter to guarantee legibility at compact sizes.
+
+All numerical metric readouts, currency milestones, timestamp logs, and probability meters must enforce tabular figures (`font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1, "cv05" 1`) to preserve vertical column alignment during real-time score updates. Micro-labels (`telemetry-micro`) enforce uppercase styling and positive tracking to denote AI confidence scores, model latencies, and sentiment categorizations.
+
+## Layout & Spacing
+
+The workspace enforces a structured, density-first layout system designed for multi-monitor desktop environments and compact in-call laptop splits.
+
+### Structural Zones
+- **Navigation Dock / Left Rail:** Fixed 72px collapsed or 240px expanded navigation column anchoring tenant context, quick meeting switches, and AE performance diagnostics.
+- **Main Canvas:** Responsive multi-pane fluid workspace. When an active call begins, the workspace splits automatically into a two-to-three column tactical grid (e.g., 60% dynamic battlecard/transcript center, 40% real-time AI copilot rail).
+- **Collapsible Tactical Drawer:** An absolute or contextual right-hand shelf (380px fixed width) reserved for risk matrices and competitor attack plans.
+
+### Breakpoints & Rhythm
+- **Desktop (>= 1280px):** 12-column layout; full analytical depth with simultaneous live radar, telemetry ribbon, and transcript feed.
+- **Laptop (1024px - 1279px):** Adaptive 8-column layout; competitor battlecards dock into a contextual tab strip above the transcript.
+- **Mobile / Compact In-Call Window (< 1024px):** Single-column stacked stream prioritizing the Live Meeting Radar pill and real-time counter-objection cards. Margin contracts from `1.5rem` to `1rem`.
+
+## Elevation & Depth
+
+Visual hierarchy uses ultra-fine structural boundaries and disciplined ambient diffusion instead of dramatic drop-shadows.
+
+### Elevation Levels
+- **Canvas Base (`#F8FAFC`):** Lowest layer containing structural dividers and backdrops.
+- **Surface Level 1 (White Cards `#FFFFFF`):** High-density functional cards bounded by an explicit 1px stroke of `#E2E8F0` or `#F1F5F9`. Shadow is ambient and whisper-quiet: `0 1px 3px rgba(15, 23, 42, 0.04), 0 1px 2px rgba(15, 23, 42, 0.02)`.
+- **Surface Level 2 (Floating Popovers, Radar Pills, Flyouts):** Active contextual aids use `0 10px 25px -5px rgba(15, 23, 42, 0.08), 0 8px 10px -6px rgba(15, 23, 42, 0.04)` with a crisp inner highlight border (`inset 0 1px 0 rgba(255, 255, 255, 0.8)`).
+- **Surface Level 3 (Tactile Drawers & Critical Risk Warnings):** Heavy modal sheets and active warning alerts introduce a directional shadow: `0 20px 25px -5px rgba(15, 23, 42, 0.12), 0 8px 10px -6px rgba(15, 23, 42, 0.06)`.
+- **AI Kinetic Glow:** When an AI objection prompt or winning counterpoint is populated mid-conversation, the container features an ethereal edge glow: `0 0 0 1px rgba(99, 102, 241, 0.35), 0 4px 12px rgba(79, 70, 229, 0.08)`.
+
+## Shapes
+
+The interface embraces a precise, architectural geometric rhythm. Base components utilize a disciplined 0.25rem (`4px`) to 0.375rem (`6px`) corner radius to maintain enterprise rigor. 
+
+Larger containers, card panels, and slide-over battlecards utilize `rounded-lg` (0.5rem / 8px). Live meeting status pills, audio telemetry meters, and high-urgency competitor warning chips utilize pill-shaped geometries (full radius) to delineate runtime status and dynamic state indicators from static content containers.
+
+## Components
+
+### Buttons
+- **Primary (AI Intelligence):** Background `#4F46E5`, text `#FFFFFF`, border `1px solid #4338CA`. Subtle inner top highlight `inset 0 1px 0 rgba(255, 255, 255, 0.16)`. Hover: `#4338CA`. Active: `#3730A3`.
+- **Secondary / Ghost:** White background `#FFFFFF`, text `#0F172A`, border `1px solid #E2E8F0`. Hover: `#F8FAFC` canvas match with border `#CBD5E1`.
+- **Tactical Action Buttons:** Compact padding (`0.375rem 0.75rem`), with integrated micro-badge indicators or shortcut key tags (e.g., `⌘K` in tabular font).
+
+### Chips & Micro-Badges
+- Scaled for minimal vertical footprint (`20px` to `24px` height).
+- **Sentiment & Signals:** Positive uses `#ECFDF5` base, `#065F46` label, and `#10B981` leading ping dot. Competitor warning uses `#FFFBEB` base, `#92400E` label, and `#F59E0B` icon.
+- **Model Telemetry:** Uppercase mono-styled badge with 1px border (`#E0E7FF`), violet text (`#4338CA`), and background (`#EEF2FF`).
+
+### Live Meeting Radar Pill
+- Floats at top-center or in the dark sidebar head. Deep slate backdrop (`#0F172A`) with a dual-ring pulsing emerald diode representing live call transcription. Displays real-time speaking-ratio split (e.g., `AE 38% / Prospect 62%`) with mono-spaced numerals.
+
+### Battlecard Cards
+- Constructed with `#FFFFFF` fill and a strict `#E2E8F0` border.
+- Features a differentiated header band: 2px left border accent corresponding to the intelligence type (Indigo for AI Suggestion, Amber for Competitor Defense, Emerald for ROI Value Anchor).
+- Collapsible bulleted snippets with one-click "Copy to Chat" or "Push to Scratchpad" micro-actions appearing on hover.
+
+### Risk & Competitor Warning Drawer
+- Slide-over panel utilizing surface `#FFFFFF` over a dimmed canvas scrim (`rgba(15, 23, 42, 0.4)`).
+- Risk cards leverage tinted surfaces (`#FFF1F2`) with `#E11D48` accents, containing immediate actionable counters, pricing dispute strategies, and previous win-rate data against the named competitor.
+
+### Input Fields & Search Bars
+- Background `#FFFFFF`, border `1px solid #CBD5E1`, typography `13px Inter`.
+- Focus ring: `0 0 0 1px #4F46E5, 0 0 0 4px rgba(99, 102, 241, 0.12)`. Unobtrusive placeholder text in `#94A3B8`.
+
+### Compact Tabular Meeting Logs
+- Bordered table with sticky headers (`#F8FAFC`), uppercase 11px column definitions, and zebra rows (`#FFFFFF` alternating with `#FAFAFA`).
+- Row hover reveals instant intelligence playback triggers, sentiment fluctuation mini-sparklines, and deal-velocity state chips.

@@ -1,0 +1,6 @@
+{
+  "name": "AI Sales Strategist",
+  "description": "Real-time enterprise sales intelligence and AI meeting copilot with competitive battlecards, objection detection, and RAG knowledge retrieval.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

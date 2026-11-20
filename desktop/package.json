@@ -1,0 +1,35 @@
+{
+  "name": "ai-sales-strategist-desktop",
+  "version": "1.0.0",
+  "description": "Always-on-top floating Zoom Copilot HUD desktop wrapper for AI Sales Strategist",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "pack:mac": "electron-builder --mac",
+    "pack:win": "electron-builder --win",
+    "pack:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.aisalesstrategist.hud",
+    "productName": "AI Sales Strategist HUD",
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.business",
+      "target": ["dmg", "zip"]
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "linux": {
+      "target": ["AppImage"]
+    }
+  }
+}
