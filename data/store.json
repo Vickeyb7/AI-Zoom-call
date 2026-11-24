@@ -74,6 +74,15 @@
   ],
   "auditEvents": [
     {
+      "id": "aud-1795552063247-4z8",
+      "organisationId": "org-acme",
+      "actorName": "Elena Vance",
+      "actorRole": "Organisation Admin",
+      "action": "copilot.quick_answered",
+      "resource": "Beacon Payments QA · concise/fast (16811ms)",
+      "createdAt": "2026-11-24T20:27:43.247Z"
+    },
+    {
       "id": "aud-1795157701271-a77",
       "organisationId": "org-acme",
       "actorName": "Elena Vance",
@@ -216,7 +225,7 @@
         "Samira Patel (VP Quality Engineering)"
       ],
       "primaryCompetitor": "LambdaTest",
-      "startedAt": "2026-11-20T05:19:33.383Z",
+      "startedAt": "2026-11-24T20:27:43.276Z",
       "durationMinutes": 0,
       "aeTalkRatio": 0,
       "prospectTalkRatio": 0,
@@ -257,7 +266,16 @@
       "signals": [],
       "insights": [],
       "scratchpad": [],
-      "suppressedDuplicatesCount": 0
+      "suppressedDuplicatesCount": 0,
+      "sessionContext": {
+        "mode": "sales_call",
+        "autoAnswer": true,
+        "preferredStyle": "concise",
+        "preferredSpeed": "fast",
+        "customInstructions": "Keep spoken answers crisp and under 45 words."
+      },
+      "quickAnswers": [],
+      "summaryStatus": "idle"
     },
     {
       "id": "mtg-101",
@@ -324,54 +342,7 @@
           "evidence": "ApexCloud proposal on the table"
         }
       ],
-      "transcript": [
-        {
-          "id": "turn-1",
-          "speaker": "AE",
-          "speakerName": "Elena Vance",
-          "text": "Thanks for making time today, Marcus and Priya. Our goal is to validate your multi-region telemetry latency targets and walk through our SOC2 Type II security boundary.",
-          "timestamp": "09:31:12",
-          "detectedTags": [
-            "Agenda Alignment"
-          ],
-          "sentimentScore": 0.65
-        },
-        {
-          "id": "turn-2",
-          "speaker": "Prospect",
-          "speakerName": "Marcus Chen",
-          "text": "Appreciate that. Honestly, we already have a proposal on the table from ApexCloud. Their per-seat quote came in noticeably lower, and they claim their regional sync is fast enough for our lab alerts.",
-          "timestamp": "09:33:04",
-          "detectedTags": [
-            "Competitor: ApexCloud",
-            "Objection: Price / budget"
-          ],
-          "sentimentScore": -0.25
-        },
-        {
-          "id": "turn-3",
-          "speaker": "AE",
-          "speakerName": "Elena Vance",
-          "text": "That makes total sense to evaluate side by side. When ApexCloud modeled your 4TB monthly cross-region volume, did they break out their $0.14/GB egress line item and the audit retention add-on?",
-          "timestamp": "09:34:40",
-          "detectedTags": [
-            "Differentiation: TCO"
-          ],
-          "sentimentScore": 0.45
-        },
-        {
-          "id": "turn-4",
-          "speaker": "Prospect",
-          "speakerName": "Priya Nair",
-          "text": "Actually no—good catch. Also, from InfoSec: we cannot go live without Customer-Managed Keys and a guarantee that our clinical trial transcripts never train external AI models.",
-          "timestamp": "09:36:18",
-          "detectedTags": [
-            "Objection: Security / compliance",
-            "Buying Signal"
-          ],
-          "sentimentScore": 0.2
-        }
-      ],
+      "transcript": [],
       "signals": [
         {
           "id": "sig-101",
@@ -561,42 +532,7 @@
           "evidence": "LegacySync Enterprise"
         }
       ],
-      "transcript": [
-        {
-          "id": "m102-t1",
-          "speaker": "Prospect",
-          "speakerName": "David Morales",
-          "text": "Our board is scrutinizing every new SaaS line item. Why should we pay $65k base when LegacySync is already sunk cost?",
-          "timestamp": "15:12:08",
-          "detectedTags": [
-            "Objection: Price / budget",
-            "Competitor: LegacySync Enterprise"
-          ],
-          "sentimentScore": -0.3
-        },
-        {
-          "id": "m102-t2",
-          "speaker": "AE",
-          "speakerName": "Elena Vance",
-          "text": "Because LegacySync is currently consuming 2.5 FTE engineers on manual schema fixes—nearly $380k/year in hidden opex that disappears in 21 days with our managed pipeline.",
-          "timestamp": "15:13:20",
-          "detectedTags": [
-            "ROI Value Anchor"
-          ],
-          "sentimentScore": 0.72
-        },
-        {
-          "id": "m102-t3",
-          "speaker": "Prospect",
-          "speakerName": "Hannah Brooks",
-          "text": "Confirmed—our platform squad logged 175 hours last month just patching broken ERP mappings. If you can give us a 90-day ramp credit, we can sign before month-end.",
-          "timestamp": "15:15:44",
-          "detectedTags": [
-            "Buying Signal"
-          ],
-          "sentimentScore": 0.85
-        }
-      ],
+      "transcript": [],
       "signals": [
         {
           "id": "sig-201",
@@ -719,20 +655,7 @@
           "evidence": "ApexCloud"
         }
       ],
-      "transcript": [
-        {
-          "id": "m103-t1",
-          "speaker": "Prospect",
-          "speakerName": "Sora Takahashi",
-          "text": "We hit 300 concurrent analysts at market open. ApexCloud promised us sub-second refresh, though we have not stress-tested them past 100 users yet.",
-          "timestamp": "11:18:22",
-          "detectedTags": [
-            "Competitor: ApexCloud",
-            "Risk: Unverified SLA"
-          ],
-          "sentimentScore": 0.1
-        }
-      ],
+      "transcript": [],
       "signals": [
         {
           "id": "sig-301",

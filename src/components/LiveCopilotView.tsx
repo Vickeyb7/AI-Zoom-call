@@ -2,6 +2,8 @@ import React from 'react';
 import {
   Activity,
   AlertTriangle,
+  ArrowDown,
+  ArrowDownToLine,
   BookOpen,
   Check,
   CheckCircle2,
@@ -21,6 +23,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Search,
   Send,
   ShieldAlert,
   Sparkles,
@@ -31,8 +34,13 @@ import {
   X,
 } from 'lucide-react';
 import { CallTimeline, type TimelineMoment } from './CallTimeline';
+import { ParakeetCopilotView } from './ParakeetCopilotView';
+import { matchesSearchTerms, renderHighlightedText } from './searchHighlight';
+import { SentimentTimelineChart } from './SentimentTimelineChart';
+import { StakeholderProfileView } from './StakeholderProfileView';
 import { ZoomHudOverlay } from './ZoomHudOverlay';
 import type { LiveAudioCaptureState } from '../hooks/useLiveAudioCapture';
+import { useTranscriptAutoScroll } from '../hooks/useTranscriptAutoScroll';
 import type {
   Battlecard,
   DetectedSignalStatus,
@@ -40,7 +48,10 @@ import type {
   FeedbackRating,
   InsightCategory,
   MeetingSession,
+  QuickAnswerSpeed,
+  QuickAnswerStyle,
   SalesInsight,
+  SessionContextConfig,
   SignalEvent,
   SpeakerRole,
 } from '../types/sales';
@@ -49,11 +60,22 @@ interface LiveCopilotViewProps {
   meetings: MeetingSession[];
   selectedMeeting: MeetingSession | null;
   battlecards: Battlecard[];
+  apiHeaders: Record<string, string>;
   wsConnected: boolean;
   analyzing: boolean;
+  quickAnswering: boolean;
+  quickAnswerQuestion: string | null;
   copilotError: string | null;
   onSelectMeeting: (meetingId: string) => void;
   onSendTurn: (speaker: SpeakerRole, speakerName: string, text: string) => void;
+  onRequestQuickAnswer: (params: {
+    question?: string;
+    style: QuickAnswerStyle;
+    speed: QuickAnswerSpeed;
+    refineAction?: 'shorter' | 'more_detail' | 'regenerate';
+    previousAnswer?: string;
+  }) => Promise<void>;
+  onUpdateSessionContext: (patch: Partial<SessionContextConfig>) => Promise<void>;
   onPushScratchpad: (text: string, sourceTitle?: string) => void;
   onInsightAction: (insightId: string, action: 'apply' | 'dismiss') => void;
   onInsightFeedback: (insightId: string, rating: FeedbackRating) => void;
@@ -62,11 +84,13 @@ interface LiveCopilotViewProps {
   onOpenRiskDrawer: () => void;
   onOpenNewMeetingModal: () => void;
   onOpenZoomConnect: () => void;
+  onOpenStealthHud: () => void;
   audioState: LiveAudioCaptureState;
   onStopAudioCapture: () => void;
   onCopyText: (text: string, label?: string) => void;
   density: DisplayDensity;
   onChangeDensity: (density: DisplayDensity) => void;
+  onRegenerateSummary: (meetingId: string) => void;
 }
 
 interface SimScenario {
@@ -362,11 +386,16 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
   meetings,
   selectedMeeting,
   battlecards,
+  apiHeaders,
   wsConnected,
   analyzing,
+  quickAnswering,
+  quickAnswerQuestion,
   copilotError,
   onSelectMeeting,
   onSendTurn,
+  onRequestQuickAnswer,
+  onUpdateSessionContext,
   onPushScratchpad,
   onInsightAction,
   onInsightFeedback,
@@ -375,21 +404,24 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
   onOpenRiskDrawer,
   onOpenNewMeetingModal,
   onOpenZoomConnect,
+  onOpenStealthHud,
   audioState,
   onStopAudioCapture,
   onCopyText,
   density,
   onChangeDensity,
+  onRegenerateSummary,
 }) => {
   const [speaker, setSpeaker] = React.useState<SpeakerRole>('Prospect');
   const [speakerName, setSpeakerName] = React.useState('');
   const [utterance, setUtterance] = React.useState('');
   const [rightTab, setRightTab] = React.useState<
-    'recommendations' | 'deal_state' | 'qualification' | 'notes'
+    'recommendations' | 'deal_state' | 'stakeholders' | 'qualification' | 'notes' | 'recap'
   >('recommendations');
   const [scratchInput, setScratchInput] = React.useState('');
+  const [copilotSearchQuery, setCopilotSearchQuery] = React.useState('');
   const [showTimeline, setShowTimeline] = React.useState(true);
-  const [viewMode, setViewMode] = React.useState<'workspace' | 'zoom'>('workspace');
+  const [viewMode, setViewMode] = React.useState<'parakeet' | 'workspace' | 'zoom'>('parakeet');
 
   // Simulator controls
   const [selectedScenarioId, setSelectedScenarioId] = React.useState(SIMULATED_SCENARIOS[0].id);
@@ -407,13 +439,23 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
   const [signalCategoryFilter, setSignalCategoryFilter] = React.useState<'all' | SignalGroupKey>('all');
   const [collapsedSignalGroups, setCollapsedSignalGroups] = React.useState<Record<string, boolean>>({});
 
-  const transcriptEndRef = React.useRef<HTMLDivElement | null>(null);
   const turnRefs = React.useRef<Record<string, HTMLDivElement | null>>({});
   const insightRefs = React.useRef<Record<string, HTMLDivElement | null>>({});
 
-  React.useEffect(() => {
-    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [selectedMeeting?.transcript.length]);
+  const latestTranscriptTurn =
+    selectedMeeting && selectedMeeting.transcript.length > 0
+      ? selectedMeeting.transcript[selectedMeeting.transcript.length - 1]
+      : null;
+
+  const transcriptScroll = useTranscriptAutoScroll({
+    meetingId: selectedMeeting?.id,
+    itemCount: selectedMeeting?.transcript.length || 0,
+    latestItemKey: latestTranscriptTurn
+      ? `${latestTranscriptTurn.id}:${latestTranscriptTurn.text.length}`
+      : 'empty',
+    active: viewMode === 'workspace',
+    suspendAutoScroll: Boolean(copilotSearchQuery.trim()),
+  });
 
   // Reset local UI trackers when switching meetings
   React.useEffect(() => {
@@ -422,6 +464,7 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
     setHighlightedInsightId(null);
     setSignalCategoryFilter('all');
     setCollapsedSignalGroups({});
+    setCopilotSearchQuery('');
     setSimPlaying(false);
     setSimStep(selectedMeeting?.transcript.length || 0);
     setElapsedSeconds((selectedMeeting?.durationMinutes || 0) * 60);
@@ -524,6 +567,8 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
 
   const handleEnd = () => {
     setSimPlaying(false);
+    setViewMode('workspace');
+    setRightTab('recap');
     onUpdateMeetingStatus('completed');
   };
 
@@ -532,6 +577,7 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
     setSimStep(0);
     setElapsedSeconds(0);
     setSelectedMomentId(null);
+    setRightTab('recommendations');
     onResetMeeting(selectedMeeting.id);
   };
 
@@ -570,6 +616,7 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
       )?.id;
     }
     if (!targetId) return;
+    transcriptScroll.pauseAutoScroll();
     turnRefs.current[targetId]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     setHighlightedTurnId(targetId);
     window.setTimeout(() => {
@@ -603,11 +650,66 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
     ? { label: 'Ended', dotClass: 'bg-slate-400', boxClass: 'bg-slate-100 text-slate-700 border-slate-200' }
     : { label: 'Ready', dotClass: 'bg-[#4F46E5]', boxClass: 'bg-[#EEF2FF] text-[#4338CA] border-[#C7D2FE]' };
 
+  if (viewMode === 'parakeet') {
+    return (
+      <ParakeetCopilotView
+        meetings={meetings}
+        selectedMeeting={selectedMeeting}
+        apiHeaders={apiHeaders}
+        wsConnected={wsConnected}
+        quickAnswering={quickAnswering}
+        quickAnswerQuestion={quickAnswerQuestion}
+        copilotError={copilotError}
+        elapsedClock={formatDurationClock(elapsedSeconds)}
+        audioState={audioState}
+        onSelectMeeting={(id) => {
+          setSimPlaying(false);
+          onSelectMeeting(id);
+        }}
+        onSendTurn={(role, name, text) => {
+          if (isReady) {
+            onUpdateMeetingStatus('active', true);
+          }
+          onSendTurn(role, name, text);
+        }}
+        onRequestQuickAnswer={onRequestQuickAnswer}
+        onUpdateSessionContext={onUpdateSessionContext}
+        onOpenAudioModal={onOpenZoomConnect}
+        onStopAudioCapture={onStopAudioCapture}
+        onOpenStealthHud={onOpenStealthHud}
+        onEndCall={handleEnd}
+        onResetMeeting={handleReset}
+        onCopyText={onCopyText}
+        onPushScratchpad={onPushScratchpad}
+        searchQuery={copilotSearchQuery}
+        onSearchQueryChange={setCopilotSearchQuery}
+        onSwitchWorkspaceMode={(mode) => {
+          if (mode === 'parakeet') {
+            setViewMode('parakeet');
+          } else if (mode === 'recap') {
+            setViewMode('workspace');
+            setRightTab('recap');
+          } else {
+            setViewMode('workspace');
+            setRightTab('recommendations');
+          }
+        }}
+      />
+    );
+  }
+
   return (
     <div className="space-y-4">
       {/* Meeting Status, Duration & Simulated Transcript Engine Bar */}
       <div className="eki-card rounded-lg px-4 py-3 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3 min-w-0">
+          <button
+            type="button"
+            onClick={() => setViewMode('parakeet')}
+            className="px-3 py-1.5 rounded-md text-xs font-semibold bg-[#0F172A] text-white hover:bg-slate-800 whitespace-nowrap shrink-0"
+          >
+            Live Copilot View
+          </button>
           <select
             aria-label="Select meeting session"
             value={selectedMeeting.id}
@@ -855,6 +957,83 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
           />
         )}
 
+        {(() => {
+          const trimmedSearch = copilotSearchQuery.trim();
+          const filteredTranscriptTurns = !trimmedSearch
+            ? selectedMeeting.transcript
+            : selectedMeeting.transcript.filter((turn) =>
+                matchesSearchTerms(trimmedSearch, [
+                  turn.text,
+                  turn.speakerName,
+                  turn.speaker,
+                  ...(turn.detectedTags || []),
+                ]),
+              );
+          const filteredScratchpadNotes = !trimmedSearch
+            ? selectedMeeting.scratchpad
+            : selectedMeeting.scratchpad.filter((note) =>
+                matchesSearchTerms(trimmedSearch, [note.text, note.sourceTitle, note.createdAt]),
+              );
+
+          return (
+            <>
+              {/* Live Search Bar for Transcript & Pinned Notes */}
+              <div className="eki-card rounded-lg px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-3">
+                <div className="relative flex-1 min-w-[240px]">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={copilotSearchQuery}
+                    onChange={(e) => setCopilotSearchQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape' && copilotSearchQuery) {
+                        setCopilotSearchQuery('');
+                      }
+                    }}
+                    aria-label="Search live transcript and pinned notes"
+                    placeholder="Filter live transcript and pinned notes by keyword, speaker, or tag..."
+                    className="eki-input w-full rounded-md pl-8 pr-8 py-1.5 text-xs text-slate-900"
+                  />
+                  {copilotSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setCopilotSearchQuery('')}
+                      aria-label="Clear search filter"
+                      className="p-0.5 rounded text-slate-400 hover:text-slate-700 absolute right-2 top-1/2 -translate-y-1/2"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-3 text-xs text-slate-500 font-mono tabular-nums whitespace-nowrap">
+                  <span>
+                    Transcript: {filteredTranscriptTurns.length}/{selectedMeeting.transcript.length}
+                  </span>
+                  <span aria-hidden="true">·</span>
+                  <button
+                    type="button"
+                    onClick={() => setRightTab('notes')}
+                    className={`hover:text-slate-900 transition-colors ${
+                      trimmedSearch && filteredScratchpadNotes.length > 0
+                        ? 'text-indigo-700 font-semibold'
+                        : ''
+                    }`}
+                  >
+                    Pinned Notes: {filteredScratchpadNotes.length}/{selectedMeeting.scratchpad.length}
+                  </button>
+                  {trimmedSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setCopilotSearchQuery('')}
+                      className="font-sans text-indigo-600 hover:underline font-medium"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
+              </div>
+
       {/* THREE-SECTION LIVE COPILOT EXPERIENCE */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
         {/* LEFT SECTION — Live Conversation (4 Cols) */}
@@ -866,14 +1045,36 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
               </h2>
               <div className="text-[11px] text-slate-500 font-mono tabular-nums">
                 Rep {selectedMeeting.aeTalkRatio}% · Prospect {selectedMeeting.prospectTalkRatio}% ·{' '}
-                {selectedMeeting.transcript.length} turns
+                {trimmedSearch
+                  ? `${filteredTranscriptTurns.length}/${selectedMeeting.transcript.length} shown`
+                  : `${selectedMeeting.transcript.length} turns`}
               </div>
             </div>
-            {simPlaying && (
-              <span className="text-[11px] font-medium text-[#4338CA] inline-flex items-center gap-1">
-                <Loader2 className="w-3 h-3 animate-spin" /> Playing
-              </span>
-            )}
+            <div className="flex items-center gap-2 shrink-0">
+              {simPlaying && (
+                <span className="text-[11px] font-medium text-[#4338CA] inline-flex items-center gap-1 whitespace-nowrap">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Playing
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={transcriptScroll.toggleAutoScroll}
+                aria-pressed={transcriptScroll.autoScrollEnabled}
+                title={
+                  transcriptScroll.autoScrollEnabled
+                    ? 'Auto-scroll is active — click to pause following new turns'
+                    : 'Auto-scroll is paused — click to follow latest speaker turns'
+                }
+                className={`px-2 py-1 rounded-md border text-[11px] font-medium inline-flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 ${
+                  transcriptScroll.autoScrollEnabled
+                    ? 'bg-indigo-50/80 border-indigo-200 text-indigo-700 hover:bg-indigo-100/70'
+                    : 'bg-white border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <ArrowDownToLine className="w-3 h-3" />
+                {transcriptScroll.autoScrollEnabled ? 'Auto-scroll' : 'Scroll paused'}
+              </button>
+            </div>
           </div>
 
           {isPaused && (
@@ -890,7 +1091,12 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
           )}
 
           {/* Live Transcript Stream */}
-          <div className="flex-1 overflow-y-auto p-3.5 space-y-2.5 bg-[#F8FAFC]/60">
+          <div className="relative flex-1 min-h-0 flex flex-col">
+            <div
+              ref={transcriptScroll.containerRef}
+              onScroll={transcriptScroll.handleScroll}
+              className="flex-1 overflow-y-auto p-3.5 space-y-2.5 bg-[#F8FAFC]/60"
+            >
             {selectedMeeting.transcript.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center px-4 space-y-3">
                 <p className="text-sm font-semibold text-slate-800">
@@ -907,10 +1113,27 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
                   <Play className="w-3.5 h-3.5" /> Start &amp; Play Simulation
                 </button>
               </div>
+            ) : filteredTranscriptTurns.length === 0 ? (
+              <div className="py-12 px-4 text-center space-y-2.5">
+                <Search className="w-5 h-5 text-slate-400 mx-auto" />
+                <div className="text-xs font-semibold text-slate-800">
+                  No matching transcript turns
+                </div>
+                <p className="text-xs text-slate-500">
+                  No turns matched &ldquo;{trimmedSearch}&rdquo;.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setCopilotSearchQuery('')}
+                  className="eki-btn-secondary px-3 py-1.5 rounded-md text-xs font-medium"
+                >
+                  Clear search
+                </button>
+              </div>
             ) : (
-              selectedMeeting.transcript.map((turn, idx) => {
+              filteredTranscriptTurns.map((turn, idx) => {
                 const isRep = turn.speaker === 'Sales Representative' || turn.speaker === 'AE';
-                const isLatest = idx === selectedMeeting.transcript.length - 1;
+                const isLatest = !trimmedSearch && idx === filteredTranscriptTurns.length - 1;
                 const isHighlighted = highlightedTurnId === turn.id;
                 const speakerRoleLabel = isRep ? 'Sales Representative' : 'Prospect';
 
@@ -941,7 +1164,7 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
                           ·
                         </span>
                         <span className="text-[11px] text-slate-500 truncate">
-                          {turn.speakerName}
+                          {renderHighlightedText(turn.speakerName, trimmedSearch)}
                         </span>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
@@ -956,13 +1179,15 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
                       </div>
                     </div>
 
-                    <p className="text-[13px] text-slate-800 leading-relaxed">{turn.text}</p>
+                    <p className="text-[13px] text-slate-800 leading-relaxed">
+                      {renderHighlightedText(turn.text, trimmedSearch)}
+                    </p>
 
                     {turn.detectedTags && turn.detectedTags.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[11px] font-medium text-slate-500">
                         {turn.detectedTags.map((tag, i) => (
                           <span key={i} className="text-[#4338CA]">
-                            #{tag}
+                            #{renderHighlightedText(tag, trimmedSearch)}
                           </span>
                         ))}
                       </div>
@@ -971,7 +1196,25 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
                 );
               })
             )}
-            <div ref={transcriptEndRef} />
+            </div>
+
+            {transcriptScroll.showJumpToLatest && !trimmedSearch && (
+              <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center px-3 z-10">
+                <button
+                  type="button"
+                  onClick={transcriptScroll.jumpToLatest}
+                  className="pointer-events-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#0F172A] hover:bg-slate-800 text-white text-xs font-medium shadow-sm transition-colors whitespace-nowrap"
+                >
+                  <ArrowDown className="w-3.5 h-3.5" />
+                  <span>Jump to latest</span>
+                  {transcriptScroll.unseenCount > 0 && (
+                    <span className="font-mono tabular-nums text-indigo-200">
+                      · {transcriptScroll.unseenCount} new
+                    </span>
+                  )}
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Optional Simulated Turn Injector */}
@@ -1257,6 +1500,17 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
               </button>
               <button
                 type="button"
+                onClick={() => setRightTab('stakeholders')}
+                className={`px-2 py-1 rounded text-xs font-medium transition-colors whitespace-nowrap ${
+                  rightTab === 'stakeholders'
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Stakeholders
+              </button>
+              <button
+                type="button"
                 onClick={() => setRightTab('qualification')}
                 className={`px-2 py-1 rounded text-xs font-medium transition-colors whitespace-nowrap ${
                   rightTab === 'qualification'
@@ -1278,6 +1532,27 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
               >
                 Notes ({selectedMeeting.scratchpad.length})
               </button>
+              {(isEnded ||
+                selectedMeeting.summaryStatus === 'generating' ||
+                Boolean(selectedMeeting.executiveSummary)) && (
+                <button
+                  type="button"
+                  onClick={() => setRightTab('recap')}
+                  className={`px-2 py-1 rounded text-xs font-medium transition-colors whitespace-nowrap inline-flex items-center gap-1 ${
+                    rightTab === 'recap'
+                      ? 'bg-white text-[#4338CA] shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {selectedMeeting.summaryStatus === 'generating' && (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  )}
+                  Recap
+                  {selectedMeeting.executiveSummary?.keyDecisions?.length
+                    ? ` (${selectedMeeting.executiveSummary.keyDecisions.length})`
+                    : ''}
+                </button>
+              )}
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
@@ -1728,6 +2003,15 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
             </div>
           )}
 
+          {rightTab === 'stakeholders' && (
+            <StakeholderProfileView
+              meeting={selectedMeeting}
+              apiHeaders={apiHeaders}
+              onCopyText={onCopyText}
+              onJumpToTurn={handleJumpToTurn}
+            />
+          )}
+
           {rightTab === 'qualification' && (
             <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
               <div className="text-xs text-slate-500 pb-1">
@@ -1790,27 +2074,226 @@ export const LiveCopilotView: React.FC<LiveCopilotViewProps> = ({
                     <ClipboardList className="w-5 h-5 text-slate-400 mx-auto" />
                     <p>Record follow-up commitments here.</p>
                   </div>
+                ) : filteredScratchpadNotes.length === 0 ? (
+                  <div className="py-10 text-center text-xs text-slate-500 space-y-2">
+                    <Search className="w-5 h-5 text-slate-400 mx-auto" />
+                    <p>No pinned notes matched &ldquo;{trimmedSearch}&rdquo;.</p>
+                    <button
+                      type="button"
+                      onClick={() => setCopilotSearchQuery('')}
+                      className="eki-btn-secondary px-3 py-1 rounded text-xs font-medium"
+                    >
+                      Clear search
+                    </button>
+                  </div>
                 ) : (
-                  selectedMeeting.scratchpad.map((note) => (
+                  filteredScratchpadNotes.map((note) => (
                     <div
                       key={note.id}
                       className="rounded-md border border-slate-200 bg-[#F8FAFC] p-3 space-y-1"
                     >
                       <div className="flex items-center justify-between text-[11px] text-slate-500">
                         <span className="font-medium text-slate-700">
-                          {note.sourceTitle || 'Call Note'}
+                          {renderHighlightedText(note.sourceTitle || 'Call Note', trimmedSearch)}
                         </span>
                         <span className="font-mono tabular-nums">{note.createdAt}</span>
                       </div>
-                      <p className="text-xs text-slate-800 leading-relaxed">{note.text}</p>
+                      <p className="text-xs text-slate-800 leading-relaxed">
+                        {renderHighlightedText(note.text, trimmedSearch)}
+                      </p>
                     </div>
                   ))
                 )}
               </div>
             </div>
           )}
+
+          {rightTab === 'recap' && (
+            <div className="flex-1 overflow-y-auto p-4 space-y-3.5 bg-[#F8FAFC]/40">
+              {selectedMeeting.summaryStatus === 'generating' ? (
+                <div className="rounded-lg border border-[#C7D2FE] bg-[#EEF2FF]/60 p-5 text-center space-y-2">
+                  <Loader2 className="w-5 h-5 text-[#4F46E5] animate-spin mx-auto" />
+                  <div className="text-xs font-semibold text-slate-900">
+                    Auto-Summarizing Meeting Decisions...
+                  </div>
+                  <p className="text-[11px] text-slate-600 leading-relaxed max-w-xs mx-auto">
+                    Synthesizing transcript chunks via Groq into a bulleted recap of key decisions, observed facts, and next steps.
+                  </p>
+                </div>
+              ) : selectedMeeting.summaryStatus === 'failed' ? (
+                <div className="rounded-lg border border-[#FECDD3] bg-[#FFF1F2] p-4 space-y-2.5">
+                  <div className="flex items-start gap-2 text-xs text-[#9F1239]">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-[#E11D48]" />
+                    <div>
+                      <div className="font-semibold">Auto-summary could not be completed</div>
+                      <p className="text-[11px] mt-0.5">
+                        {selectedMeeting.summaryError || 'LLM synthesis failed.'}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onRegenerateSummary(selectedMeeting.id)}
+                    className="eki-btn-secondary px-3 py-1.5 rounded-md text-xs font-medium inline-flex items-center gap-1.5"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" /> Retry Recap
+                  </button>
+                </div>
+              ) : selectedMeeting.executiveSummary ? (
+                (() => {
+                  const summary = selectedMeeting.executiveSummary;
+                  const decisions = summary.keyDecisions || [];
+                  const copyMarkdown = [
+                    `# Meeting Recap — ${selectedMeeting.accountName}`,
+                    '',
+                    '## Key Decisions',
+                    ...(decisions.length > 0
+                      ? decisions.map((d) => `- ${d}`)
+                      : ['- No formal decisions recorded.']),
+                    '',
+                    '## Agreed Next Steps',
+                    ...summary.nextSteps.map((s, idx) => `${idx + 1}. ${s}`),
+                  ].join('\n');
+
+                  return (
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="text-xs font-semibold text-slate-900">
+                            {summary.autoGenerated ? 'Auto-Generated Meeting Recap' : 'Meeting Decisions Recap'}
+                          </div>
+                          <div className="text-[11px] text-slate-500 font-mono tabular-nums">
+                            {summary.chunkCount
+                              ? `${summary.chunkCount} transcript chunk${summary.chunkCount === 1 ? '' : 's'} synthesized`
+                              : 'Synthesized from session state'}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => onCopyText(copyMarkdown, 'Decisions recap copied')}
+                            className="eki-btn-secondary px-2.5 py-1 rounded text-[11px] font-medium inline-flex items-center gap-1"
+                          >
+                            <Copy className="w-3 h-3" /> Copy Recap
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onRegenerateSummary(selectedMeeting.id)}
+                            className="eki-btn-secondary px-2 py-1 rounded text-[11px] font-medium inline-flex items-center gap-1"
+                            title="Regenerate recap"
+                          >
+                            <RefreshCw className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Key Decisions Bulleted Recap */}
+                      <div className="rounded-md border border-[#C7D2FE] bg-white p-3.5 space-y-2">
+                        <div className="text-[11px] font-semibold uppercase tracking-wider text-[#4338CA]">
+                          Key Meeting Decisions ({decisions.length})
+                        </div>
+                        {decisions.length > 0 ? (
+                          <ul className="space-y-1.5 text-xs text-slate-800">
+                            {decisions.map((decision, i) => (
+                              <li key={i} className="flex items-start gap-2 leading-relaxed">
+                                <span className="text-[#4F46E5] font-bold mt-0.5">•</span>
+                                <span>{decision}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="text-xs text-slate-500">
+                            No explicit decisions were finalized during this session.
+                          </p>
+                        )}
+                      </div>
+
+                      {summary.nextSteps.length > 0 && (
+                        <div className="rounded-md border border-slate-200 bg-white p-3.5 space-y-2">
+                          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-600">
+                            Agreed Next Steps
+                          </div>
+                          <ul className="space-y-1.5 text-xs text-slate-700">
+                            {summary.nextSteps.map((step, i) => (
+                              <li key={i} className="flex items-start gap-2 leading-relaxed">
+                                <span className="font-mono text-[#4F46E5] font-semibold">
+                                  {i + 1}.
+                                </span>
+                                <span>{step}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {summary.facts.length > 0 && (
+                        <div className="rounded-md border border-slate-200 bg-[#F8FAFC] p-3.5 space-y-2">
+                          <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-600">
+                            Observed Facts (Transcript Grounded)
+                          </div>
+                          <ul className="space-y-1.5 text-xs text-slate-700">
+                            {summary.facts.map((fact, i) => (
+                              <li key={i} className="flex items-start gap-2 leading-relaxed">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                                <span>{fact}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {summary.followUpEmail && (
+                        <div className="rounded-md border border-slate-200 bg-white p-3.5 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-600">
+                              Follow-Up Email Draft
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onCopyText(summary.followUpEmail, 'Follow-up email copied')
+                              }
+                              className="text-[11px] font-medium text-[#4F46E5] hover:text-[#3525CD] inline-flex items-center gap-1"
+                            >
+                              <Copy className="w-3 h-3" /> Copy
+                            </button>
+                          </div>
+                          <pre className="text-xs text-slate-700 whitespace-pre-wrap font-sans leading-relaxed">
+                            {summary.followUpEmail}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()
+              ) : (
+                <div className="py-10 px-4 text-center space-y-2.5">
+                  <Sparkles className="w-5 h-5 text-[#4F46E5] mx-auto" />
+                  <div className="text-xs font-semibold text-slate-800">
+                    Meeting Decisions Recap
+                  </div>
+                  <p className="text-xs text-slate-500 max-w-xs mx-auto leading-relaxed">
+                    End a meeting with conversation turns to automatically synthesize a bulleted recap of key decisions, or trigger synthesis manually below.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => onRegenerateSummary(selectedMeeting.id)}
+                    className="eki-btn-secondary px-3 py-1.5 rounded-md text-xs font-medium inline-flex items-center gap-1.5"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" /> Generate Recap Now
+                  </button>
+                </div>
+              )}
+
+              {/* Sentiment Analysis Timeline Chart below Meeting Recap */}
+              <SentimentTimelineChart meeting={selectedMeeting} compact />
+            </div>
+          )}
         </section>
       </div>
+            </>
+          );
+        })()}
       </>
       )}
 

@@ -12,14 +12,22 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
   ERROR: 40,
 };
 
+let warnedLogLevel = false;
+
 export function validateLogLevel(): LogLevel {
-  const raw = (process.env.LOG_LEVEL || 'INFO').trim().toUpperCase();
+  const raw = (process.env.LOG_LEVEL || 'INFO')
+    .trim()
+    .replace(/^['"]+|['"]+$/g, '')
+    .trim()
+    .toUpperCase();
   if (raw === 'DEBUG' || raw === 'INFO' || raw === 'WARN' || raw === 'ERROR') {
     return raw;
   }
-  throw new Error(
-    `Invalid LOG_LEVEL="${process.env.LOG_LEVEL}". Allowed values: DEBUG, INFO, WARN, ERROR.`,
-  );
+  if (!warnedLogLevel) {
+    warnedLogLevel = true;
+    console.warn(`[Logger] Invalid LOG_LEVEL="${process.env.LOG_LEVEL}"; defaulting to "INFO".`);
+  }
+  return 'INFO';
 }
 
 export function getLogLevel(): LogLevel {

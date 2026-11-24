@@ -12,6 +12,7 @@ interface FirebaseAuthContextValue {
   authReady: boolean;
   signingIn: boolean;
   authError: string | null;
+  authErrorCode: string | null;
   idToken: string | null;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
@@ -20,11 +21,14 @@ interface FirebaseAuthContextValue {
 
 const FirebaseAuthContext = React.createContext<FirebaseAuthContextValue | null>(null);
 
+function extractFirebaseErrorCode(err: unknown): string {
+  return typeof err === 'object' && err !== null && 'code' in err
+    ? String((err as { code?: unknown }).code)
+    : '';
+}
+
 function formatFirebaseAuthError(err: unknown): string {
-  const code =
-    typeof err === 'object' && err !== null && 'code' in err
-      ? String((err as { code?: unknown }).code)
-      : '';
+  const code = extractFirebaseErrorCode(err);
 
   if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
     return 'Google sign-in popup was closed before completing. Click "Continue with Google" to try again.';
@@ -33,7 +37,8 @@ function formatFirebaseAuthError(err: unknown): string {
     return 'Your browser blocked the Google sign-in popup. Please allow popups for this site or open the app in a standalone tab.';
   }
   if (code === 'auth/unauthorized-domain') {
-    return 'This domain is not yet authorized in Firebase Auth. Open from the primary app URL or add this domain in Firebase Console.';
+    const host = typeof window !== 'undefined' ? window.location.hostname : 'this domain';
+    return `Domain "${host}" is not yet authorized in Firebase Auth. Refresh and retry, or add "${host}" under Authentication → Settings → Authorized domains in Firebase Console.`;
   }
   if (code === 'auth/network-request-failed') {
     return 'Network error while reaching Google authentication. Check your connection and retry.';
@@ -46,6 +51,7 @@ export const FirebaseAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [authReady, setAuthReady] = React.useState(false);
   const [signingIn, setSigningIn] = React.useState(false);
   const [authError, setAuthError] = React.useState<string | null>(null);
+  const [authErrorCode, setAuthErrorCode] = React.useState<string | null>(null);
   const [idToken, setIdToken] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -75,9 +81,11 @@ export const FirebaseAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const signIn = React.useCallback(async () => {
     setSigningIn(true);
     setAuthError(null);
+    setAuthErrorCode(null);
     try {
       await signInWithGoogle();
     } catch (err) {
+      setAuthErrorCode(extractFirebaseErrorCode(err) || null);
       setAuthError(formatFirebaseAuthError(err));
     } finally {
       setSigningIn(false);
@@ -86,14 +94,19 @@ export const FirebaseAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   const signOut = React.useCallback(async () => {
     setAuthError(null);
+    setAuthErrorCode(null);
     try {
       await signOutUser();
     } catch (err) {
+      setAuthErrorCode(extractFirebaseErrorCode(err) || null);
       setAuthError(formatFirebaseAuthError(err));
     }
   }, []);
 
-  const clearError = React.useCallback(() => setAuthError(null), []);
+  const clearError = React.useCallback(() => {
+    setAuthError(null);
+    setAuthErrorCode(null);
+  }, []);
 
   const value = React.useMemo<FirebaseAuthContextValue>(
     () => ({
@@ -101,12 +114,13 @@ export const FirebaseAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
       authReady,
       signingIn,
       authError,
+      authErrorCode,
       idToken,
       signIn,
       signOut,
       clearError,
     }),
-    [user, authReady, signingIn, authError, idToken, signIn, signOut, clearError],
+    [user, authReady, signingIn, authError, authErrorCode, idToken, signIn, signOut, clearError],
   );
 
   return (

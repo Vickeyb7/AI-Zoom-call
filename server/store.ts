@@ -15,6 +15,7 @@ import type {
   Organisation,
   RagSearchResult,
   StakeholderInteraction,
+  StakeholderNote,
   StakeholderProfile,
   UserProfile,
 } from '../src/types/sales.ts';
@@ -1618,6 +1619,24 @@ Northbridge Vault provides FIPS 140-3 Level 4 hardware key custody strictly isol
           sentiment: 'neutral',
         },
       ],
+      historicalNotes: [
+        {
+          id: 'note-samira-1',
+          text: 'Prefers concise total-cost-of-ownership comparisons anchored in CI queue minutes saved rather than per-seat list discounts.',
+          author: 'Elena Vance',
+          meetingTitle: 'Initial QA Platform Discovery & Pain Mapping',
+          createdAt: '2026-11-11',
+          source: 'crm_history',
+        },
+        {
+          id: 'note-samira-2',
+          text: 'Confirmed her team runs 1,800+ nightly Playwright tests via GitHub Actions; zero-rewrite migration is critical for Q1 approval.',
+          author: 'Elena Vance',
+          meetingTitle: 'GitHub Actions & Jira Integration Architecture Follow-Up',
+          createdAt: '2026-11-14',
+          source: 'meeting_note',
+        },
+      ],
     },
     {
       id: 'stk-marcus-chen',
@@ -1651,6 +1670,24 @@ Northbridge Vault provides FIPS 140-3 Level 4 hardware key custody strictly isol
           sentiment: 'positive',
         },
       ],
+      historicalNotes: [
+        {
+          id: 'note-marcus-1',
+          text: 'Highly technical buyer—responds best to concrete p99 latency benchmarks and architecture diagrams over high-level marketing slides.',
+          author: 'Elena Vance',
+          meetingTitle: 'Vanguard BioSystems — Architecture & Scale Scoping',
+          createdAt: '2026-11-05',
+          source: 'crm_history',
+        },
+        {
+          id: 'note-marcus-2',
+          text: 'Needs joint sign-off with Priya Nair (Head of InfoSec) before requesting final CFO budget release.',
+          author: 'Elena Vance',
+          meetingTitle: 'Sandbox Benchmark Access & SDK Walkthrough',
+          createdAt: '2026-11-12',
+          source: 'meeting_note',
+        },
+      ],
     },
     {
       id: 'stk-priya-nair',
@@ -1674,6 +1711,16 @@ Northbridge Vault provides FIPS 140-3 Level 4 hardware key custody strictly isol
           sentiment: 'cautious',
         },
       ],
+      historicalNotes: [
+        {
+          id: 'note-priya-1',
+          text: 'Strict veto authority on any vendor handling clinical telemetry; always lead with AWS KMS BYOK and VPC PrivateLink documentation.',
+          author: 'Elena Vance',
+          meetingTitle: 'InfoSec Questionnaire & Trust Center Review',
+          createdAt: '2026-11-09',
+          source: 'crm_history',
+        },
+      ],
     },
     {
       id: 'stk-david-morales',
@@ -1695,6 +1742,16 @@ Northbridge Vault provides FIPS 140-3 Level 4 hardware key custody strictly isol
             'Requested a board-ready ROI model comparing our bundled platform fee against ApexCloud overage charges.',
           keyExcerpt: 'Show me payback inside two quarters and I can unlock Q4 budget.',
           sentiment: 'cautious',
+        },
+      ],
+      historicalNotes: [
+        {
+          id: 'note-david-1',
+          text: 'Requires sub-6-month payback proof and predictable annual uplift caps (<=5%) before signing multi-year agreements.',
+          author: 'Elena Vance',
+          meetingTitle: 'Meridian Logistics — Executive Business Case Briefing',
+          createdAt: '2026-11-06',
+          source: 'crm_history',
         },
       ],
     },
@@ -1729,6 +1786,16 @@ Northbridge Vault provides FIPS 140-3 Level 4 hardware key custody strictly isol
           sentiment: 'positive',
         },
       ],
+      historicalNotes: [
+        {
+          id: 'note-hannah-1',
+          text: 'Strong internal champion—co-built the 31% exception-triage savings deck used with CFO David Morales.',
+          author: 'Elena Vance',
+          meetingTitle: 'Pilot Readout: 31% Faster Exception Triage',
+          createdAt: '2026-11-10',
+          source: 'meeting_note',
+        },
+      ],
     },
     {
       id: 'stk-liam-oconnor',
@@ -1749,6 +1816,16 @@ Northbridge Vault provides FIPS 140-3 Level 4 hardware key custody strictly isol
           summary:
             'Approved tenant-isolated data residency posture pending immutable audit trail verification.',
           sentiment: 'neutral',
+        },
+      ],
+      historicalNotes: [
+        {
+          id: 'note-liam-1',
+          text: 'Requires immutable audit logs exported to Splunk SIEM before production sign-off.',
+          author: 'Elena Vance',
+          meetingTitle: 'Northstar FinTech — Zero-Trust & PrivateLink Pre-Audit',
+          createdAt: '2026-11-04',
+          source: 'crm_history',
         },
       ],
     },
@@ -1774,6 +1851,16 @@ Northbridge Vault provides FIPS 140-3 Level 4 hardware key custody strictly isol
           sentiment: 'positive',
         },
       ],
+      historicalNotes: [
+        {
+          id: 'note-sora-1',
+          text: 'Primary architectural recommender to the CISO; impressed by deterministic event replay during failover test.',
+          author: 'Elena Vance',
+          meetingTitle: 'Real-Time Risk Scoring Throughput Benchmark',
+          createdAt: '2026-11-08',
+          source: 'meeting_note',
+        },
+      ],
     },
     {
       id: 'stk-claire-sterling',
@@ -1794,6 +1881,16 @@ Northbridge Vault provides FIPS 140-3 Level 4 hardware key custody strictly isol
           summary:
             'Shared FY27 competitive win-rate goals against VeloCRM and requested a phased 60-rep onboarding timeline.',
           sentiment: 'positive',
+        },
+      ],
+      historicalNotes: [
+        {
+          id: 'note-claire-1',
+          text: 'Targeting a 6-point win-rate lift against VeloCRM across EMEA & North America enterprise reps in Q1.',
+          author: 'Elena Vance',
+          meetingTitle: 'Kestrel Aerospace — Revenue Enablement Alignment',
+          createdAt: '2026-11-12',
+          source: 'crm_history',
         },
       ],
     },
@@ -1818,6 +1915,16 @@ Northbridge Vault provides FIPS 140-3 Level 4 hardware key custody strictly isol
           sentiment: 'neutral',
         },
       ],
+      historicalNotes: [
+        {
+          id: 'note-victor-1',
+          text: 'Zero-bot audio capture and privacy-first 0-day transcript retention resolved his primary IT governance blocker.',
+          author: 'Elena Vance',
+          meetingTitle: 'Enterprise Identity & Governance Checklist',
+          createdAt: '2026-11-13',
+          source: 'meeting_note',
+        },
+      ],
     },
     {
       id: 'stk-ciso-office',
@@ -1837,6 +1944,16 @@ Northbridge Vault provides FIPS 140-3 Level 4 hardware key custody strictly isol
           summary:
             'Evaluated FIPS 140-3 HSM key custody requirements against CipherVault baseline.',
           sentiment: 'neutral',
+        },
+      ],
+      historicalNotes: [
+        {
+          id: 'note-ciso-1',
+          text: 'Mandates FIPS 140-3 validated HSM custody and zero external cloud transcript storage.',
+          author: 'Jordan Blake',
+          meetingTitle: 'Helios Defense — HSM Custody Pre-Assessment',
+          createdAt: '2026-11-10',
+          source: 'crm_history',
         },
       ],
     },
@@ -1917,8 +2034,16 @@ class SalesStore {
       changed = true;
     }
     for (const stk of seed.stakeholders) {
-      if (!this.state.stakeholders.some((s) => s.id === stk.id)) {
+      const existing = this.state.stakeholders.find((s) => s.id === stk.id);
+      if (!existing) {
         this.state.stakeholders.push(stk);
+        changed = true;
+      } else if (
+        (!existing.historicalNotes || existing.historicalNotes.length === 0) &&
+        stk.historicalNotes &&
+        stk.historicalNotes.length > 0
+      ) {
+        existing.historicalNotes = [...stk.historicalNotes];
         changed = true;
       }
     }
@@ -2073,13 +2198,17 @@ class SalesStore {
     meeting.aeTalkRatio = 0;
     meeting.prospectTalkRatio = 0;
     meeting.sentimentTrend = [60];
+    meeting.sentimentSegments = undefined;
     meeting.transcript = [];
     meeting.signals = [];
     meeting.insights = [];
     meeting.scratchpad = [];
+    meeting.quickAnswers = [];
     meeting.suppressedDuplicatesCount = 0;
     meeting.zoomLink = undefined;
     meeting.executiveSummary = undefined;
+    meeting.summaryStatus = 'idle';
+    meeting.summaryError = undefined;
     meeting.conversationState = undefined;
     for (const q of meeting.qualification) {
       q.covered = false;
@@ -2178,25 +2307,88 @@ class SalesStore {
       (s) => s.organisationId === organisationId,
     );
 
-    return meeting.prospectStakeholders.map((rawLabel, idx) => {
+    // Gather all scheduled AND live-detected non-rep participants (deduplicated by normalized name)
+    const candidateLabels: string[] = [];
+    const seenNormNames = new Set<string>();
+    const repNormName = (meeting.aeName || '').trim().toLowerCase();
+
+    const addCandidate = (raw?: string) => {
+      const trimmed = (raw || '').trim();
+      if (!trimmed) return;
+      const parsed = this.parseStakeholderLabel(trimmed);
+      const norm = parsed.name.toLowerCase();
+      if (
+        !norm ||
+        norm === 'you' ||
+        norm === 'sales representative' ||
+        norm === 'ae' ||
+        (repNormName && norm === repNormName)
+      ) {
+        return;
+      }
+      if (seenNormNames.has(norm)) return;
+      seenNormNames.add(norm);
+      candidateLabels.push(trimmed);
+    };
+
+    for (const label of meeting.prospectStakeholders) {
+      addCandidate(label);
+    }
+    for (const turn of meeting.transcript) {
+      if (turn.speaker === 'Sales Representative' || turn.speaker === 'AE') continue;
+      addCandidate(turn.speakerName);
+    }
+    for (const label of meeting.conversationState?.stakeholders || []) {
+      addCandidate(label);
+    }
+
+    const summaries = candidateLabels.map((rawLabel, idx) => {
       const parsed = this.parseStakeholderLabel(rawLabel);
       const normName = parsed.name.toLowerCase();
 
       const profile = orgStakeholders.find(
         (s) =>
           s.name.toLowerCase() === normName ||
-          rawLabel.toLowerCase().includes(s.name.toLowerCase()),
+          rawLabel.toLowerCase().includes(s.name.toLowerCase()) ||
+          s.name.toLowerCase().includes(normName),
       );
 
       const resolvedName = profile?.name || parsed.name;
       const resolvedRole = profile?.role || parsed.role;
       const normResolved = resolvedName.toLowerCase();
+      const firstName = normResolved.split(/\s+/)[0] || normResolved;
 
-      const currentMeetingTurns = meeting.transcript.filter((t) => {
+      const matchingCurrentTurns = meeting.transcript.filter((t) => {
         if (t.speaker === 'Sales Representative' || t.speaker === 'AE') return false;
         const sp = (t.speakerName || '').toLowerCase();
-        return sp === normResolved || sp.includes(normResolved);
-      }).length;
+        return (
+          sp === normResolved ||
+          sp.includes(normResolved) ||
+          sp === normName ||
+          sp.includes(normName)
+        );
+      });
+
+      const currentMeetingTurns = matchingCurrentTurns.length;
+      const latestCurrentTurn =
+        matchingCurrentTurns.length > 0
+          ? matchingCurrentTurns[matchingCurrentTurns.length - 1]
+          : null;
+
+      const avgCurrentSentiment =
+        matchingCurrentTurns.length > 0
+          ? matchingCurrentTurns.reduce((sum, t) => sum + (t.sentimentScore || 0), 0) /
+            matchingCurrentTurns.length
+          : 0;
+
+      const latestSentiment: 'positive' | 'neutral' | 'cautious' | undefined =
+        matchingCurrentTurns.length > 0
+          ? avgCurrentSentiment > 0.15
+            ? 'positive'
+            : avgCurrentSentiment < -0.15
+            ? 'cautious'
+            : 'neutral'
+          : undefined;
 
       // Aggregate real interactions from OTHER meetings in the database
       const meetingHistory: StakeholderInteraction[] = [];
@@ -2214,6 +2406,7 @@ class SalesStore {
 
         const latestTurn = spokenTurns[spokenTurns.length - 1];
         const summary =
+          other.executiveSummary?.keyDecisions?.[0] ||
           other.executiveSummary?.facts?.[0] ||
           (spokenTurns.length > 0
             ? `Participated in ${other.stage} (${spokenTurns.length} recorded turn${spokenTurns.length === 1 ? '' : 's'}).`
@@ -2248,6 +2441,53 @@ class SalesStore {
 
       combinedHistory.sort((a, b) => b.date.localeCompare(a.date));
 
+      // Aggregate historical notes: stored profile notes + matching pinned scratchpad notes across org meetings
+      const historicalNotes: StakeholderNote[] = [...(profile?.historicalNotes || [])];
+      const noteTextSeen = new Set(historicalNotes.map((n) => n.text.trim().toLowerCase()));
+
+      for (const m of orgMeetings) {
+        const isParticipantInM =
+          m.id === meeting.id ||
+          m.prospectStakeholders.some((s) => s.toLowerCase().includes(normResolved)) ||
+          m.transcript.some(
+            (t) =>
+              t.speaker !== 'Sales Representative' &&
+              t.speaker !== 'AE' &&
+              (t.speakerName || '').toLowerCase().includes(normResolved),
+          );
+        if (!isParticipantInM) continue;
+
+        for (const pad of m.scratchpad || []) {
+          const titleLower = (pad.sourceTitle || '').toLowerCase();
+          const textLower = pad.text.toLowerCase();
+          const explicitlyMatched =
+            titleLower.includes(normResolved) ||
+            textLower.includes(normResolved) ||
+            (firstName.length >= 4 &&
+              (titleLower.includes(firstName) || textLower.includes(firstName)));
+          const soloStakeholderMeeting =
+            m.prospectStakeholders.length === 1 &&
+            m.prospectStakeholders[0].toLowerCase().includes(normResolved);
+
+          if (!explicitlyMatched && !soloStakeholderMeeting) continue;
+          const normNoteText = pad.text.trim().toLowerCase();
+          if (noteTextSeen.has(normNoteText)) continue;
+          noteTextSeen.add(normNoteText);
+
+          historicalNotes.push({
+            id: `pad-${m.id}-${pad.id}`,
+            text: pad.text,
+            author: pad.sourceTitle || m.aeName || 'Sales Rep',
+            meetingId: m.id,
+            meetingTitle: m.title,
+            createdAt: m.id === meeting.id ? pad.createdAt : m.startedAt.slice(0, 10),
+            source: m.id === meeting.id ? 'live_note' : 'meeting_note',
+          });
+        }
+      }
+
+      historicalNotes.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
       return {
         id: profile?.id || `stk-inline-${meeting.id}-${idx}`,
         name: resolvedName,
@@ -2258,9 +2498,85 @@ class SalesStore {
         focusAreas: profile?.focusAreas || [],
         totalInteractions: combinedHistory.length + (currentMeetingTurns > 0 ? 1 : 0),
         currentMeetingTurns,
+        detectedInCall: currentMeetingTurns > 0,
+        latestTurnId: latestCurrentTurn?.id,
+        latestTurnExcerpt: latestCurrentTurn?.text,
+        latestTurnTimestamp: latestCurrentTurn?.timestamp,
+        latestSentiment,
         previousInteractions: combinedHistory,
+        historicalNotes,
       };
     });
+
+    // Place actively speaking / detected participants first, preserving order within each group
+    summaries.sort((a, b) => {
+      if (Boolean(a.detectedInCall) !== Boolean(b.detectedInCall)) {
+        return a.detectedInCall ? -1 : 1;
+      }
+      return b.currentMeetingTurns - a.currentMeetingTurns;
+    });
+
+    return summaries;
+  }
+
+  addStakeholderNote(params: {
+    organisationId: string;
+    meetingId: string;
+    accountName: string;
+    meetingTitle: string;
+    stakeholderId?: string;
+    stakeholderName: string;
+    stakeholderRole?: string;
+    author: string;
+    text: string;
+  }): MeetingStakeholderSummary[] {
+    if (!Array.isArray(this.state.stakeholders)) {
+      this.state.stakeholders = [];
+    }
+
+    const parsed = this.parseStakeholderLabel(params.stakeholderName);
+    const normName = parsed.name.toLowerCase();
+
+    let profile = this.state.stakeholders.find(
+      (s) =>
+        s.organisationId === params.organisationId &&
+        ((params.stakeholderId && s.id === params.stakeholderId) ||
+          s.name.toLowerCase() === normName),
+    );
+
+    if (!profile) {
+      const resolvedRole = params.stakeholderRole?.trim() || parsed.role;
+      profile = {
+        id: `stk-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        organisationId: params.organisationId,
+        name: parsed.name,
+        role: resolvedRole,
+        accountName: params.accountName,
+        buyingRole: this.inferBuyingRole(resolvedRole),
+        focusAreas: [],
+        priorInteractions: [],
+        historicalNotes: [],
+      };
+      this.state.stakeholders.push(profile);
+    }
+
+    if (!Array.isArray(profile.historicalNotes)) {
+      profile.historicalNotes = [];
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    profile.historicalNotes.unshift({
+      id: `stknote-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      text: params.text.trim(),
+      author: params.author || 'Sales Rep',
+      meetingId: params.meetingId,
+      meetingTitle: params.meetingTitle,
+      createdAt: today,
+      source: 'live_note',
+    });
+
+    this.save();
+    return this.getMeetingStakeholders(params.meetingId, params.organisationId);
   }
 
   logAudit(params: {

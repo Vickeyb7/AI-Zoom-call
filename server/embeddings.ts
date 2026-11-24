@@ -46,6 +46,8 @@ const KNOWN_MODEL_DIMS: Record<string, number> = {
   'nomic-ai/nomic-embed-text-v1.5': 768,
   'BAAI/bge-base-en-v1.5': 768,
   'BAAI/bge-small-en-v1.5': 384,
+  'sentence-transformers/all-MiniLM-L6-v2': 384,
+  'Xenova/all-MiniLM-L6-v2': 384,
 };
 
 const LOCAL_ONNX_REPO_MAP: Record<string, string> = {
@@ -54,32 +56,53 @@ const LOCAL_ONNX_REPO_MAP: Record<string, string> = {
   'BAAI/bge-base-en-v1.5': 'Xenova/bge-base-en-v1.5',
   'BAAI/bge-small-en-v1.5': 'Xenova/bge-small-en-v1.5',
   'nomic-ai/nomic-embed-text-v1.5': 'nomic-ai/nomic-embed-text-v1.5',
+  'sentence-transformers/all-MiniLM-L6-v2': 'Xenova/all-MiniLM-L6-v2',
+  'Xenova/all-MiniLM-L6-v2': 'Xenova/all-MiniLM-L6-v2',
 };
 
+let warnedEmbeddingProvider = false;
+let warnedEmbeddingModel = false;
+
+function cleanEnvValue(raw: string | undefined): string {
+  return (raw || '')
+    .trim()
+    .replace(/^['"]+|['"]+$/g, '')
+    .trim();
+}
+
 export function validateEmbeddingEnvironment(): EmbeddingConfig {
-  const rawProvider = (process.env.EMBEDDING_PROVIDER || 'huggingface_local').trim().toLowerCase();
-  if (rawProvider !== 'huggingface_local') {
-    throw new Error(
-      `Invalid EMBEDDING_PROVIDER="${process.env.EMBEDDING_PROVIDER}". Only "huggingface_local" is permitted (local Hugging Face embeddings exclusively).`,
-    );
+  const rawOriginal = cleanEnvValue(process.env.EMBEDDING_PROVIDER);
+  const normalizedProvider = rawOriginal.toLowerCase().replace(/[*]+$/g, '');
+  if (rawOriginal && normalizedProvider !== 'huggingface_local') {
+    if (!warnedEmbeddingProvider) {
+      warnedEmbeddingProvider = true;
+      console.warn(
+        `[Embeddings] Normalizing EMBEDDING_PROVIDER="${process.env.EMBEDDING_PROVIDER}" to "huggingface_local" (local Hugging Face embeddings exclusively).`,
+      );
+    }
   }
 
-  const model = (process.env.EMBEDDING_MODEL || 'BAAI/bge-m3').trim();
-  if (!model || /\s/.test(model)) {
-    throw new Error(
-      `Invalid EMBEDDING_MODEL="${process.env.EMBEDDING_MODEL}". Expected a valid Hugging Face model ID such as "BAAI/bge-m3".`,
-    );
+  const rawModel = cleanEnvValue(process.env.EMBEDDING_MODEL);
+  let model = rawModel || 'BAAI/bge-m3';
+  if (!model || /\s/.test(model) || model.includes('*')) {
+    if (!warnedEmbeddingModel && rawModel) {
+      warnedEmbeddingModel = true;
+      console.warn(
+        `[Embeddings] Invalid EMBEDDING_MODEL="${process.env.EMBEDDING_MODEL}"; falling back to "BAAI/bge-m3".`,
+      );
+    }
+    model = 'BAAI/bge-m3';
   }
 
-  const device = (process.env.EMBEDDING_DEVICE || 'cpu').trim();
+  const device = cleanEnvValue(process.env.EMBEDDING_DEVICE) || 'cpu';
   const batchSize = Math.max(
     1,
-    Math.min(128, Number.parseInt(process.env.EMBEDDING_BATCH_SIZE || '64', 10) || 64),
+    Math.min(128, Number.parseInt(cleanEnvValue(process.env.EMBEDDING_BATCH_SIZE) || '64', 10) || 64),
   );
-  const normalize = (process.env.EMBEDDING_NORMALIZE || 'true').toLowerCase() !== 'false';
+  const normalize = (cleanEnvValue(process.env.EMBEDDING_NORMALIZE) || 'true').toLowerCase() !== 'false';
   const expectedDimension = KNOWN_MODEL_DIMS[model] || 1024;
   const localOnnxRepo =
-    process.env.EMBEDDING_LOCAL_ONNX_REPO?.trim() ||
+    cleanEnvValue(process.env.EMBEDDING_LOCAL_ONNX_REPO) ||
     LOCAL_ONNX_REPO_MAP[model] ||
     'Xenova/bge-m3';
 

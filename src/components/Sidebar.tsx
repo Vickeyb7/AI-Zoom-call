@@ -2,6 +2,7 @@ import React from 'react';
 import {
   ChevronLeft,
   ChevronRight,
+  Compass,
   Database,
   FileText,
   LayoutDashboard,
@@ -11,10 +12,18 @@ import {
   Settings,
   ShieldAlert,
   Sparkles,
+  Upload,
 } from 'lucide-react';
 import type { MeetingSession, Organisation, UserProfile } from '../types/sales';
 
-export type NavTab = 'dashboard' | 'copilot' | 'knowledge' | 'battlecards' | 'meetings' | 'settings';
+export type NavTab =
+  | 'dashboard'
+  | 'copilot'
+  | 'transcript_analyzer'
+  | 'knowledge'
+  | 'battlecards'
+  | 'meetings'
+  | 'settings';
 
 interface SidebarProps {
   activeTab: NavTab;
@@ -34,10 +43,13 @@ interface SidebarProps {
     photoURL?: string;
   };
   onSignOut?: () => void;
+  onOpenOnboarding?: () => void;
+  setupIncomplete?: boolean;
 }
 
 const NAV_ITEMS: { id: NavTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: 'copilot', label: 'Live Copilot', icon: Radio },
+  { id: 'transcript_analyzer', label: 'Transcript Analyzer', icon: Upload },
   { id: 'knowledge', label: 'Knowledge Base', icon: Database },
   { id: 'battlecards', label: 'Battlecards', icon: ShieldAlert },
   { id: 'meetings', label: 'Meetings', icon: FileText },
@@ -59,6 +71,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   currentUser,
   googleUser,
   onSignOut,
+  onOpenOnboarding,
+  setupIncomplete,
 }) => {
   const [avatarFailed, setAvatarFailed] = React.useState(false);
   const displayName = googleUser?.name || currentUser?.name || 'Workspace User';
@@ -231,6 +245,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         )}
       </nav>
+
+      {/* Setup Guide Re-entry Action */}
+      {onOpenOnboarding && (
+        <div className="px-3 pb-2.5">
+          <button
+            type="button"
+            onClick={onOpenOnboarding}
+            title={collapsed ? 'Open Setup Guide' : 'Launch interactive quick-start setup guide'}
+            className={`w-full flex items-center gap-2.5 rounded-md px-3 py-2 text-xs font-medium border border-slate-800 bg-[#0F172A] text-slate-300 hover:text-white hover:border-slate-700 transition-colors whitespace-nowrap ${
+              collapsed ? 'justify-center px-0' : 'justify-between'
+            }`}
+          >
+            <span className="inline-flex items-center gap-2.5 min-w-0">
+              <Compass className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+              {!collapsed && <span className="truncate">Setup Guide</span>}
+            </span>
+            {!collapsed && setupIncomplete && (
+              <span className="text-[10px] font-medium text-indigo-300 shrink-0">Start</span>
+            )}
+          </button>
+        </div>
+      )}
 
       {/* Authenticated Google User Footer */}
       <div className="p-3 border-t border-slate-800/80 bg-[#0F172A]/60 space-y-2.5">

@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
+  Download,
   FileText,
   History,
   Loader2,
@@ -14,8 +15,11 @@ import {
   Play,
   Search,
   Sparkles,
+  Upload,
   Users,
 } from 'lucide-react';
+import { SentimentTimelineChart } from './SentimentTimelineChart';
+import { exportMeetingReportPdf } from '../lib/exportMeetingReportPdf';
 import type {
   MeetingSession,
   MeetingStakeholderSummary,
@@ -28,6 +32,7 @@ interface MeetingsArchiveViewProps {
   onRefresh: () => Promise<void>;
   onCopyText: (text: string, label?: string) => void;
   apiHeaders: Record<string, string>;
+  onOpenTranscriptAnalyzer?: () => void;
 }
 
 const STATUS_TABS: ('all' | MeetingStatus)[] = ['all', 'active', 'paused', 'completed', 'created'];
@@ -58,6 +63,7 @@ export const MeetingsArchiveView: React.FC<MeetingsArchiveViewProps> = ({
   onRefresh,
   onCopyText,
   apiHeaders,
+  onOpenTranscriptAnalyzer,
 }) => {
   const [search, setSearch] = React.useState('');
   const [statusFilter, setStatusFilter] = React.useState<'all' | MeetingStatus>('all');
@@ -65,6 +71,8 @@ export const MeetingsArchiveView: React.FC<MeetingsArchiveViewProps> = ({
   const [generatingSummary, setGeneratingSummary] = React.useState(false);
   const [summaryError, setSummaryError] = React.useState<string | null>(null);
   const [copiedEmail, setCopiedEmail] = React.useState(false);
+  const [exportingPdf, setExportingPdf] = React.useState(false);
+  const [exportedPdf, setExportedPdf] = React.useState(false);
 
   const [stakeholders, setStakeholders] = React.useState<MeetingStakeholderSummary[]>([]);
   const [loadingStakeholders, setLoadingStakeholders] = React.useState(false);
@@ -173,21 +181,33 @@ export const MeetingsArchiveView: React.FC<MeetingsArchiveViewProps> = ({
             className="eki-input w-full rounded-md pl-9 pr-3 py-2 text-[13px]"
           />
         </div>
-        <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg overflow-x-auto">
-          {STATUS_TABS.map((st) => (
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg overflow-x-auto">
+            {STATUS_TABS.map((st) => (
+              <button
+                key={st}
+                type="button"
+                onClick={() => setStatusFilter(st)}
+                className={`px-3 py-1 rounded-md text-xs font-medium capitalize transition-colors whitespace-nowrap ${
+                  statusFilter === st
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {st}
+              </button>
+            ))}
+          </div>
+          {onOpenTranscriptAnalyzer && (
             <button
-              key={st}
               type="button"
-              onClick={() => setStatusFilter(st)}
-              className={`px-3 py-1 rounded-md text-xs font-medium capitalize transition-colors whitespace-nowrap ${
-                statusFilter === st
-                  ? 'bg-white text-slate-900 shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
+              onClick={onOpenTranscriptAnalyzer}
+              className="eki-btn-primary px-3 py-1.5 rounded-md text-xs font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
             >
-              {st}
+              <Upload className="w-3.5 h-3.5" />
+              Upload Transcript
             </button>
-          ))}
+          )}
         </div>
       </div>
 
@@ -278,7 +298,7 @@ export const MeetingsArchiveView: React.FC<MeetingsArchiveViewProps> = ({
         {/* Stakeholder Profiles + Post-Call Executive Summary & Follow-Up */}
         {selected && (
           <div className="xl:col-span-5 eki-card rounded-lg p-5 space-y-5">
-            <div className="flex items-start justify-between gap-3">
+            <div className="space-y-3">
               <div className="min-w-0">
                 <h3 className="font-display text-[16px] font-semibold text-slate-900 truncate">
                   {selected.accountName}
@@ -290,24 +310,60 @@ export const MeetingsArchiveView: React.FC<MeetingsArchiveViewProps> = ({
                   {selected.platform} · {selected.stage} · {selected.startedAt.slice(0, 10)}
                 </div>
               </div>
-              <button
-                type="button"
-                disabled={generatingSummary || selected.transcript.length === 0}
-                onClick={() => void handleGenerateSummary(selected.id)}
-                className="eki-btn-primary px-3 py-1.5 rounded-md text-xs font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 disabled:opacity-50"
-              >
-                {generatingSummary ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    Summarizing...
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-3.5 h-3.5" />
-                    AI Summary &amp; Email
-                  </>
-                )}
-              </button>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={exportingPdf}
+                  onClick={() => {
+                    setExportingPdf(true);
+                    try {
+                      exportMeetingReportPdf(selected, stakeholders);
+                      setExportedPdf(true);
+                      window.setTimeout(() => setExportedPdf(false), 2200);
+                    } finally {
+                      setExportingPdf(false);
+                    }
+                  }}
+                  className="eki-btn-secondary px-3 py-1.5 rounded-md text-xs font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 disabled:opacity-50"
+                >
+                  {exportingPdf ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      Exporting...
+                    </>
+                  ) : exportedPdf ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      Report Exported
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-3.5 h-3.5 text-slate-600" />
+                      Export Meeting Report
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  disabled={generatingSummary || selected.transcript.length === 0}
+                  onClick={() => void handleGenerateSummary(selected.id)}
+                  className="eki-btn-primary px-3 py-1.5 rounded-md text-xs font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 disabled:opacity-50"
+                >
+                  {generatingSummary ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      Summarizing...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-3.5 h-3.5" />
+                      AI Summary &amp; Email
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
             {/* Qualification & Signal Telemetry Snapshot */}
@@ -536,8 +592,38 @@ export const MeetingsArchiveView: React.FC<MeetingsArchiveViewProps> = ({
               </div>
             )}
 
-            {selected.executiveSummary ? (
+            {selected.summaryStatus === 'generating' && !selected.executiveSummary ? (
+              <div className="rounded-md bg-[#EEF2FF]/60 border border-[#C7D2FE] p-4 flex items-center gap-2.5 text-xs text-[#3730A3]">
+                <Loader2 className="w-4 h-4 animate-spin shrink-0 text-[#4F46E5]" />
+                <span>Auto-summarizing transcript chunks into key meeting decisions...</span>
+              </div>
+            ) : selected.executiveSummary ? (
               <div className="space-y-4 pt-1 border-t border-slate-200">
+                {selected.executiveSummary.keyDecisions &&
+                  selected.executiveSummary.keyDecisions.length > 0 && (
+                    <div className="rounded-md bg-white border border-[#C7D2FE] p-3.5 space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-[11px] font-semibold uppercase tracking-wider text-[#4338CA]">
+                          Key Meeting Decisions
+                        </div>
+                        <span className="text-[11px] font-mono text-slate-500">
+                          {selected.executiveSummary.autoGenerated ? 'Auto-recap' : 'Recap'}
+                          {selected.executiveSummary.chunkCount
+                            ? ` · ${selected.executiveSummary.chunkCount} chunk${selected.executiveSummary.chunkCount === 1 ? '' : 's'}`
+                            : ''}
+                        </span>
+                      </div>
+                      <ul className="space-y-1.5 text-xs text-slate-800">
+                        {selected.executiveSummary.keyDecisions.map((decision, i) => (
+                          <li key={i} className="flex items-start gap-2 leading-relaxed">
+                            <span className="text-[#4F46E5] font-bold mt-0.5">•</span>
+                            <span>{decision}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
                 <div className="rounded-md bg-[#F8FAFC] border border-slate-200 p-3.5 space-y-2">
                   <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-600">
                     Observed Facts (Transcript Grounded)
@@ -620,6 +706,9 @@ export const MeetingsArchiveView: React.FC<MeetingsArchiveViewProps> = ({
                 </p>
               </div>
             )}
+
+            {/* Sentiment Analysis Timeline Chart below Meeting Recap */}
+            <SentimentTimelineChart meeting={selected} />
           </div>
         )}
       </div>

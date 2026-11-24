@@ -6,18 +6,25 @@ import { LiveCopilotView } from './components/LiveCopilotView';
 import { KnowledgeBaseView } from './components/KnowledgeBaseView';
 import { BattlecardsView } from './components/BattlecardsView';
 import { MeetingsArchiveView } from './components/MeetingsArchiveView';
+import { TranscriptAnalyzerView } from './components/TranscriptAnalyzerView';
 import { SettingsView } from './components/SettingsView';
 import { RiskDrawer } from './components/RiskDrawer';
 import { DesktopHUDView } from './components/DesktopHUDView';
 import { CornerCopilotHud } from './components/CornerCopilotHud';
 import { ZoomConnectModal } from './components/ZoomConnectModal';
 import { LoginGate } from './components/LoginGate';
+import {
+  ONBOARDING_MODES,
+  OnboardingWizardModal,
+  QuickStartChecklistBanner,
+} from './components/OnboardingFlow';
 import { useAuth } from './components/FirebaseAuthProvider';
 import { useLiveAudioCapture } from './hooks/useLiveAudioCapture';
 import type {
   AuditEvent,
   Battlecard,
   CopilotPreferences,
+  CopilotSessionMode,
   DashboardData,
   DealStage,
   DisplayDensity,
@@ -25,12 +32,16 @@ import type {
   KnowledgeDoc,
   MeetingSession,
   Organisation,
+  QuickAnswerSpeed,
+  QuickAnswerStyle,
+  SessionContextConfig,
   SpeakerRole,
   UserProfile,
 } from './types/sales';
 
 const TAB_TITLES: Record<NavTab, string> = {
   copilot: 'Live Meeting Copilot',
+  transcript_analyzer: 'Transcript Strategy & Sentiment Analyzer',
   knowledge: 'Knowledge Base & RAG Index',
   battlecards: 'Competitive Battlecards',
   meetings: 'Meetings Archive',
@@ -93,11 +104,17 @@ function AuthenticatedWorkspace({
   );
   const [wsConnected, setWsConnected] = React.useState(false);
   const [analyzing, setAnalyzing] = React.useState(false);
+  const [quickAnswering, setQuickAnswering] = React.useState(false);
+  const [quickAnswerQuestion, setQuickAnswerQuestion] = React.useState<string | null>(null);
   const [copilotError, setCopilotError] = React.useState<string | null>(null);
 
   const [riskDrawerOpen, setRiskDrawerOpen] = React.useState(false);
   const [zoomModalOpen, setZoomModalOpen] = React.useState(false);
   const [newMeetingModalOpen, setNewMeetingModalOpen] = React.useState(false);
+  const [onboardingOpen, setOnboardingOpen] = React.useState(false);
+  const [onboardingStep, setOnboardingStep] = React.useState<1 | 2 | 3>(1);
+  const [preferencesLoaded, setPreferencesLoaded] = React.useState(false);
+  const autoOpenedOnboardingRef = React.useRef(false);
   const [toast, setToast] = React.useState<string | null>(null);
   const [preferences, setPreferences] = React.useState<CopilotPreferences>(() => {
     try {
@@ -209,26 +226,35 @@ function AuthenticatedWorkspace({
     fetch('/api/preferences', { headers: apiHeaders })
       .then((res) => (res.ok ? res.json() : null))
       .then((data: CopilotPreferences | null) => {
-        if (!active || !data) return;
-        setPreferences(data);
-        try {
-          window.localStorage.setItem('ais_copilot_preferences', JSON.stringify(data));
-        } catch {
-          // Ignore storage errors
+        if (!active) return;
+        if (data) {
+          setPreferences(data);
+          try {
+            window.localStorage.setItem('ais_copilot_preferences', JSON.stringify(data));
+          } catch {
+            // Ignore storage errors
+          }
         }
+        setPreferencesLoaded(true);
       })
       .catch(() => {
-        // Non-fatal
+        if (active) setPreferencesLoaded(true);
       });
     return () => {
       active = false;
     };
   }, [apiHeaders]);
 
-  const handleChangeDensity = React.useCallback(
-    (density: DisplayDensity) => {
+  const updatePreferences = React.useCallback(
+    (patch: Partial<CopilotPreferences>) => {
       setPreferences((prev) => {
-        const next: CopilotPreferences = { ...prev, density };
+        const next: CopilotPreferences = {
+          ...prev,
+          ...patch,
+          onboardingChecklist: patch.onboardingChecklist
+            ? { ...(prev.onboardingChecklist || {}), ...patch.onboardingChecklist }
+            : prev.onboardingChecklist,
+        };
         try {
           window.localStorage.setItem('ais_copilot_preferences', JSON.stringify(next));
         } catch {
@@ -239,13 +265,61 @@ function AuthenticatedWorkspace({
       void fetch('/api/preferences', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', ...apiHeaders },
-        body: JSON.stringify({ density }),
+        body: JSON.stringify(patch),
       }).catch(() => {
         // Non-fatal
       });
     },
     [apiHeaders],
   );
+
+  const handleChangeDensity = React.useCallback(
+    (density: DisplayDensity) => {
+      updatePreferences({ density });
+    },
+    [updatePreferences],
+  );
+
+  // Open onboarding wizard automatically once for brand-new users
+  React.useEffect(() => {
+    if (
+      !preferencesLoaded ||
+      loading ||
+      autoOpenedOnboardingRef.current ||
+      desktopHudMode
+    ) {
+      return;
+    }
+    autoOpenedOnboardingRef.current = true;
+    if (!preferences.onboardingCompleted && !preferences.onboardingDismissed) {
+      setOnboardingStep(1);
+      setOnboardingOpen(true);
+    }
+  }, [
+    preferencesLoaded,
+    loading,
+    desktopHudMode,
+    preferences.onboardingCompleted,
+    preferences.onboardingDismissed,
+  ]);
+
+  // Passively record checklist milestones as user explores key workspace surfaces
+  React.useEffect(() => {
+    if (!preferencesLoaded) return;
+    if (
+      (activeTab === 'knowledge' || activeTab === 'battlecards') &&
+      !preferences.onboardingChecklist?.knowledgeReviewed
+    ) {
+      updatePreferences({ onboardingChecklist: { knowledgeReviewed: true } });
+    }
+  }, [activeTab, preferencesLoaded, preferences.onboardingChecklist?.knowledgeReviewed, updatePreferences]);
+
+  React.useEffect(() => {
+    if (!preferencesLoaded) return;
+    if ((cornerHudOpen || desktopHudMode) && !preferences.onboardingChecklist?.stealthHudExplored) {
+      updatePreferences({ onboardingChecklist: { stealthHudExplored: true } });
+    }
+  }, [cornerHudOpen, desktopHudMode, preferencesLoaded, preferences.onboardingChecklist?.stealthHudExplored, updatePreferences]);
 
   // WebSocket Connection & Auto-Reconnect
   React.useEffect(() => {
@@ -277,6 +351,8 @@ function AuthenticatedWorkspace({
             type: string;
             meeting?: MeetingSession;
             analyzing?: boolean;
+            generating?: boolean;
+            question?: string;
             error?: string;
           };
 
@@ -284,8 +360,19 @@ function AuthenticatedWorkspace({
             setAnalyzing(payload.analyzing);
           }
 
+          if (payload.type === 'quick_answer:generating') {
+            setQuickAnswering(Boolean(payload.generating));
+            if (payload.generating && payload.question) {
+              setQuickAnswerQuestion(payload.question);
+            } else if (!payload.generating) {
+              setQuickAnswerQuestion(null);
+            }
+          }
+
           if (
-            (payload.type === 'meeting:state' || payload.type === 'copilot:update') &&
+            (payload.type === 'meeting:state' ||
+              payload.type === 'copilot:update' ||
+              payload.type === 'quick_answer:ready') &&
             payload.meeting
           ) {
             const updated = payload.meeting;
@@ -311,13 +398,18 @@ function AuthenticatedWorkspace({
                   }
                 : prev,
             );
-            if (payload.type === 'copilot:update') {
+            if (payload.type === 'copilot:update' || payload.type === 'quick_answer:ready') {
               setCopilotError(null);
+            }
+            if (payload.type === 'quick_answer:ready') {
+              setQuickAnswering(false);
+              setQuickAnswerQuestion(null);
             }
           }
 
           if (payload.type === 'copilot:error') {
             setAnalyzing(false);
+            setQuickAnswering(false);
             setCopilotError(payload.error || 'Real-time AI analysis failed');
           }
         } catch {
@@ -460,6 +552,68 @@ function AuthenticatedWorkspace({
       onError: (msg) => setCopilotError(msg),
     });
 
+  const handleRequestQuickAnswer = React.useCallback(
+    async (params: {
+      question?: string;
+      style: QuickAnswerStyle;
+      speed: QuickAnswerSpeed;
+      refineAction?: 'shorter' | 'more_detail' | 'regenerate';
+      previousAnswer?: string;
+    }) => {
+      if (!selectedMeeting) return;
+      setQuickAnswering(true);
+      setQuickAnswerQuestion(params.question || null);
+      setCopilotError(null);
+      try {
+        const res = await fetch(`/api/meetings/${selectedMeeting.id}/quick-answer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...apiHeaders },
+          body: JSON.stringify(params),
+        });
+        const data = (await res.json()) as { meeting?: MeetingSession; error?: string };
+        if (!res.ok) {
+          throw new Error(data.error || 'Quick answer generation failed');
+        }
+        if (data.meeting) {
+          setMeetings((prev) =>
+            prev.map((m) => (m.id === data.meeting!.id ? data.meeting! : m)),
+          );
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Quick answer generation failed';
+        setCopilotError(message);
+        showToast(message);
+      } finally {
+        setQuickAnswering(false);
+        setQuickAnswerQuestion(null);
+      }
+    },
+    [selectedMeeting, apiHeaders, showToast],
+  );
+
+  const handleUpdateSessionContext = React.useCallback(
+    async (patch: Partial<SessionContextConfig>) => {
+      if (!selectedMeeting) return;
+      try {
+        const res = await fetch(`/api/meetings/${selectedMeeting.id}/context`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...apiHeaders },
+          body: JSON.stringify(patch),
+        });
+        const updated = (await res.json()) as MeetingSession;
+        if (res.ok) {
+          setMeetings((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+          if (patch.userBackground !== undefined || patch.customInstructions !== undefined) {
+            showToast('Copilot context saved');
+          }
+        }
+      } catch {
+        showToast('Failed to save session context');
+      }
+    },
+    [selectedMeeting, apiHeaders, showToast],
+  );
+
   const handleEnterDesktopHud = () => {
     if (isElectronHud) {
       setDesktopHudMode(true);
@@ -472,10 +626,78 @@ function AuthenticatedWorkspace({
       return;
     }
 
-    // In regular browser tabs, pin the compact HUD to a corner so the full screen stays interactive
+    // In regular browser tabs, pin the compact Stealth Overlay to a corner so the full screen stays interactive
     setCornerHudOpen(true);
-    showToast('Corner HUD pinned — move to any corner or minimize to a pill');
+    showToast('Stealth Overlay active — press Alt+H anytime to hide or restore');
   };
+
+  const handleRunOnboardingPracticeQuestion = React.useCallback(
+    (mode: CopilotSessionMode, preferredStyle: QuickAnswerStyle) => {
+      const modeMeta = ONBOARDING_MODES.find((m) => m.id === mode) || ONBOARDING_MODES[0];
+      setActiveTab('copilot');
+      setOnboardingOpen(false);
+      updatePreferences({
+        onboardingCompleted: true,
+        onboardingChecklist: {
+          goalConfigured: true,
+          liveSessionTested: true,
+        },
+      });
+      if (!selectedMeeting) return;
+      if (selectedMeeting.status === 'created') {
+        sendWsMessage({
+          type: 'meeting:status',
+          meetingId: selectedMeeting.id,
+          status: 'active',
+          captureConsentConfirmed: true,
+        });
+      }
+      sendWsMessage({
+        type: 'transcript:add',
+        meetingId: selectedMeeting.id,
+        eventId: `evt-onboard-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        speaker: 'Prospect',
+        speakerName: modeMeta.sampleQuestion.speakerName,
+        text: modeMeta.sampleQuestion.text,
+      });
+      void handleRequestQuickAnswer({
+        question: modeMeta.sampleQuestion.text,
+        style: preferredStyle,
+        speed: 'fast',
+      });
+      showToast('Live practice question sent — watch the instant answer appear');
+    },
+    [selectedMeeting, sendWsMessage, handleRequestQuickAnswer, updatePreferences, showToast],
+  );
+
+  const effectiveChecklist = {
+    goalConfigured: Boolean(
+      preferences.onboardingChecklist?.goalConfigured ||
+        selectedMeeting?.sessionContext?.userBackground?.trim(),
+    ),
+    knowledgeReviewed: Boolean(preferences.onboardingChecklist?.knowledgeReviewed),
+    liveSessionTested: Boolean(
+      preferences.onboardingChecklist?.liveSessionTested ||
+        (selectedMeeting && selectedMeeting.transcript.length > 0) ||
+        audioState.capturing,
+    ),
+    stealthHudExplored: Boolean(
+      preferences.onboardingChecklist?.stealthHudExplored || cornerHudOpen || desktopHudMode,
+    ),
+  };
+
+  const allChecklistComplete =
+    effectiveChecklist.goalConfigured &&
+    effectiveChecklist.knowledgeReviewed &&
+    effectiveChecklist.liveSessionTested &&
+    effectiveChecklist.stealthHudExplored;
+
+  const showQuickStartChecklist =
+    preferencesLoaded &&
+    !onboardingOpen &&
+    !preferences.onboardingChecklistDismissed &&
+    !allChecklistComplete &&
+    (activeTab === 'copilot' || activeTab === 'dashboard');
 
   const handleExitDesktopHud = () => {
     setDesktopHudMode(false);
@@ -591,6 +813,11 @@ function AuthenticatedWorkspace({
         currentUser={currentUser}
         googleUser={googleUser}
         onSignOut={() => void onSignOut()}
+        onOpenOnboarding={() => {
+          setOnboardingStep(1);
+          setOnboardingOpen(true);
+        }}
+        setupIncomplete={!allChecklistComplete}
       />
 
       <div className="flex-1 min-w-0 flex flex-col">
@@ -646,13 +873,13 @@ function AuthenticatedWorkspace({
               onClick={() => setCornerHudOpen((prev) => !prev)}
               className={`px-3 py-1.5 rounded-md text-xs font-medium border inline-flex items-center gap-1.5 whitespace-nowrap transition-colors ${
                 cornerHudOpen
-                  ? 'bg-[#EEF2FF] text-[#4338CA] border-[#C7D2FE]'
+                  ? 'bg-[#0F172A] text-white border-[#0F172A]'
                   : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
               }`}
-              title="Pin a compact, unobtrusive Copilot HUD to the screen corner"
+              title="Open semi-transparent stealth overlay HUD (Alt+H to quick hide)"
             >
               <PictureInPicture2 className="w-3.5 h-3.5" />
-              {cornerHudOpen ? 'Corner HUD On' : 'Corner HUD'}
+              {cornerHudOpen ? 'Stealth HUD On' : 'Stealth HUD'}
             </button>
             <button
               type="button"
@@ -667,6 +894,37 @@ function AuthenticatedWorkspace({
 
         {/* Main Content Viewport */}
         <main className="flex-1 p-5 max-w-[1600px] w-full mx-auto">
+          {showQuickStartChecklist && (
+            <QuickStartChecklistBanner
+              checklist={effectiveChecklist}
+              onOpenWizard={(step = 1) => {
+                setOnboardingStep(step);
+                setOnboardingOpen(true);
+              }}
+              onOpenKnowledgeBase={() => {
+                setActiveTab('knowledge');
+                updatePreferences({ onboardingChecklist: { knowledgeReviewed: true } });
+              }}
+              onConnectAudio={() => {
+                setActiveTab('copilot');
+                setZoomModalOpen(true);
+              }}
+              onRunSampleQuestion={() => {
+                const mode = selectedMeeting?.sessionContext?.mode || 'sales_call';
+                const style = selectedMeeting?.sessionContext?.preferredStyle || 'concise';
+                handleRunOnboardingPracticeQuestion(mode, style);
+              }}
+              onOpenStealthHud={() => {
+                handleEnterDesktopHud();
+                updatePreferences({ onboardingChecklist: { stealthHudExplored: true } });
+              }}
+              onDismiss={() => {
+                updatePreferences({ onboardingChecklistDismissed: true });
+                showToast('Checklist hidden — reopen Setup Guide anytime from the sidebar');
+              }}
+            />
+          )}
+
           {activeTab === 'dashboard' && (
             <DashboardView
               data={dashboard}
@@ -683,8 +941,11 @@ function AuthenticatedWorkspace({
               meetings={meetings}
               selectedMeeting={selectedMeeting}
               battlecards={battlecards}
+              apiHeaders={apiHeaders}
               wsConnected={wsConnected}
               analyzing={analyzing}
+              quickAnswering={quickAnswering}
+              quickAnswerQuestion={quickAnswerQuestion}
               copilotError={copilotError}
               onSelectMeeting={(id) => {
                 setSelectedMeetingId(id);
@@ -701,6 +962,8 @@ function AuthenticatedWorkspace({
                   text,
                 });
               }}
+              onRequestQuickAnswer={handleRequestQuickAnswer}
+              onUpdateSessionContext={handleUpdateSessionContext}
               onPushScratchpad={(text, sourceTitle) => {
                 if (!selectedMeeting) return;
                 sendWsMessage({
@@ -742,7 +1005,7 @@ function AuthenticatedWorkspace({
                   status === 'paused'
                     ? 'Meeting paused'
                     : status === 'completed'
-                    ? 'Meeting ended'
+                    ? 'Meeting ended — generating decisions recap...'
                     : 'Meeting live';
                 showToast(label);
               }}
@@ -757,11 +1020,29 @@ function AuthenticatedWorkspace({
               onOpenRiskDrawer={() => setRiskDrawerOpen(true)}
               onOpenNewMeetingModal={() => setNewMeetingModalOpen(true)}
               onOpenZoomConnect={() => setZoomModalOpen(true)}
+              onOpenStealthHud={handleEnterDesktopHud}
               audioState={audioState}
               onStopAudioCapture={stopCapture}
               onCopyText={handleCopyText}
               density={preferences.density}
               onChangeDensity={handleChangeDensity}
+              onRegenerateSummary={async (meetingId: string) => {
+                showToast('Synthesizing meeting decisions recap...');
+                try {
+                  const res = await fetch(`/api/meetings/${meetingId}/summary`, {
+                    method: 'POST',
+                    headers: apiHeaders,
+                  });
+                  if (!res.ok) {
+                    const data = (await res.json()) as { error?: string };
+                    throw new Error(data.error || 'Recap generation failed');
+                  }
+                  await fetchAllData();
+                  showToast('Meeting recap updated');
+                } catch (err) {
+                  showToast(err instanceof Error ? err.message : 'Recap generation failed');
+                }
+              }}
             />
           )}
 
@@ -783,6 +1064,16 @@ function AuthenticatedWorkspace({
             />
           )}
 
+          {activeTab === 'transcript_analyzer' && (
+            <TranscriptAnalyzerView
+              apiHeaders={apiHeaders}
+              battlecards={battlecards}
+              onCopyText={handleCopyText}
+              onRefresh={fetchAllData}
+              onOpenMeetingsArchive={() => setActiveTab('meetings')}
+            />
+          )}
+
           {activeTab === 'meetings' && (
             <MeetingsArchiveView
               meetings={meetings}
@@ -790,6 +1081,7 @@ function AuthenticatedWorkspace({
               onRefresh={fetchAllData}
               onCopyText={handleCopyText}
               apiHeaders={apiHeaders}
+              onOpenTranscriptAnalyzer={() => setActiveTab('transcript_analyzer')}
             />
           )}
 
@@ -806,6 +1098,49 @@ function AuthenticatedWorkspace({
           )}
         </main>
       </div>
+
+      {/* Guided Onboarding Workflow Modal */}
+      <OnboardingWizardModal
+        open={onboardingOpen}
+        initialStep={onboardingStep}
+        userName={googleUser.name || currentUser?.name}
+        currentContext={selectedMeeting?.sessionContext}
+        indexedDocsCount={docs.length}
+        battlecardsCount={battlecards.length}
+        onSaveContext={async (patch) => {
+          await handleUpdateSessionContext(patch);
+          updatePreferences({
+            onboardingChecklist: { goalConfigured: true },
+          });
+        }}
+        onOpenKnowledgeBase={() => {
+          setOnboardingOpen(false);
+          setActiveTab('knowledge');
+          updatePreferences({
+            onboardingCompleted: true,
+            onboardingChecklist: { knowledgeReviewed: true },
+          });
+        }}
+        onConnectAudio={() => {
+          setOnboardingOpen(false);
+          setActiveTab('copilot');
+          setZoomModalOpen(true);
+          updatePreferences({
+            onboardingCompleted: true,
+            onboardingChecklist: { goalConfigured: true },
+          });
+        }}
+        onRunPracticeQuestion={handleRunOnboardingPracticeQuestion}
+        onComplete={() => {
+          setOnboardingOpen(false);
+          updatePreferences({ onboardingCompleted: true });
+          showToast('Setup complete — reopen Setup Guide anytime from the sidebar');
+        }}
+        onSkip={() => {
+          setOnboardingOpen(false);
+          updatePreferences({ onboardingDismissed: true });
+        }}
+      />
 
       {/* Risk & Competitor Drawer */}
       {selectedMeeting && (
@@ -1007,15 +1342,17 @@ function AuthenticatedWorkspace({
         </div>
       )}
 
-      {/* Unobtrusive Corner-Pinned Copilot HUD */}
+      {/* Stealth Floating Copilot Overlay */}
       <CornerCopilotHud
         open={cornerHudOpen}
         meeting={selectedMeeting}
         battlecards={battlecards}
         analyzing={analyzing}
+        quickAnswering={quickAnswering}
         audioState={audioState}
         onStartAudioCapture={startCapture}
         onStopAudioCapture={stopCapture}
+        onRequestQuickAnswer={handleRequestQuickAnswer}
         onInsightAction={(insightId, action) => {
           if (!selectedMeeting) return;
           sendWsMessage({

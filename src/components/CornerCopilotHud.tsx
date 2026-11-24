@@ -1,36 +1,28 @@
 import React from 'react';
 import {
-  AlertTriangle,
   ArrowDownLeft,
   ArrowDownRight,
   ArrowUpLeft,
   ArrowUpRight,
-  BookOpen,
   Check,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  ChevronUp,
   Copy,
-  Lightbulb,
+  EyeOff,
   Loader2,
   Maximize2,
   Mic,
   Minimize2,
-  ShieldAlert,
-  Sparkles,
   Square,
-  ThumbsUp,
   X,
+  Zap,
 } from 'lucide-react';
 import type { AudioCaptureMode, LiveAudioCaptureState } from '../hooks/useLiveAudioCapture';
 import type {
   Battlecard,
-  DetectedSignalStatus,
   DisplayDensity,
   FeedbackRating,
   MeetingSession,
-  SalesInsight,
+  QuickAnswerSpeed,
+  QuickAnswerStyle,
 } from '../types/sales';
 
 export type HudCorner = 'bottom-right' | 'top-right' | 'bottom-left' | 'top-left';
@@ -40,9 +32,15 @@ interface CornerCopilotHudProps {
   meeting: MeetingSession | null;
   battlecards: Battlecard[];
   analyzing: boolean;
+  quickAnswering?: boolean;
   audioState: LiveAudioCaptureState;
   onStartAudioCapture: (mode: AudioCaptureMode) => Promise<boolean>;
   onStopAudioCapture: () => void;
+  onRequestQuickAnswer?: (params: {
+    question?: string;
+    style: QuickAnswerStyle;
+    speed: QuickAnswerSpeed;
+  }) => Promise<void>;
   onInsightAction: (insightId: string, action: 'apply' | 'dismiss') => void;
   onInsightFeedback: (insightId: string, rating: FeedbackRating) => void;
   onCopyText: (text: string, label?: string) => void;
@@ -62,146 +60,131 @@ const CORNER_CLASSES: Record<HudCorner, string> = {
 const CORNER_ORDER: HudCorner[] = ['bottom-right', 'top-right', 'bottom-left', 'top-left'];
 
 function CornerIcon({ corner }: { corner: HudCorner }) {
-  if (corner === 'bottom-right') return <ArrowDownRight className="w-3 h-3" />;
-  if (corner === 'top-right') return <ArrowUpRight className="w-3 h-3" />;
-  if (corner === 'bottom-left') return <ArrowDownLeft className="w-3 h-3" />;
-  return <ArrowUpLeft className="w-3 h-3" />;
-}
-
-function statusPill(status?: DetectedSignalStatus, evolutionCount = 1): {
-  label: string;
-  className: string;
-} {
-  if (status === 'resolved') {
-    return {
-      label: 'Resolved',
-      className: 'text-emerald-700 bg-emerald-50 border-emerald-200',
-    };
-  }
-  if (status === 'evolving' || evolutionCount > 1) {
-    return {
-      label: `Evolving x${evolutionCount}`,
-      className: 'text-indigo-700 bg-indigo-50 border-indigo-200',
-    };
-  }
-  return {
-    label: 'Live Tip',
-    className: 'text-amber-800 bg-amber-50 border-amber-200',
-  };
+  if (corner === 'bottom-right') return <ArrowDownRight className="w-3.5 h-3.5" />;
+  if (corner === 'top-right') return <ArrowUpRight className="w-3.5 h-3.5" />;
+  if (corner === 'bottom-left') return <ArrowDownLeft className="w-3.5 h-3.5" />;
+  return <ArrowUpLeft className="w-3.5 h-3.5" />;
 }
 
 export const CornerCopilotHud: React.FC<CornerCopilotHudProps> = ({
   open,
   meeting,
-  battlecards,
   analyzing,
+  quickAnswering = false,
   audioState,
   onStartAudioCapture,
   onStopAudioCapture,
-  onInsightAction,
-  onInsightFeedback,
+  onRequestQuickAnswer,
   onCopyText,
   onOpenAudioSettings,
   onClose,
-  density = 'standard',
-  onChangeDensity,
 }) => {
   const [corner, setCorner] = React.useState<HudCorner>('bottom-right');
   const [minimized, setMinimized] = React.useState(false);
-  const [activeIndex, setActiveIndex] = React.useState(0);
-  const [showSources, setShowSources] = React.useState(false);
-  const [copiedId, setCopiedId] = React.useState<string | null>(null);
+  const [stealthHidden, setStealthHidden] = React.useState(false);
+  const [opacity, setOpacity] = React.useState<number>(92);
+  const [style, setStyle] = React.useState<QuickAnswerStyle>('concise');
+  const [copied, setCopied] = React.useState(false);
 
-  const activeInsights = React.useMemo(
-    () => (meeting ? meeting.insights.filter((i) => !i.dismissed) : []),
-    [meeting],
-  );
-
-  const latestKey = activeInsights[0]
-    ? `${activeInsights[0].id}:${activeInsights[0].evolutionCount || 1}:${activeInsights[0].objectionStatus}`
-    : 'none';
-  const prevLatestKeyRef = React.useRef<string>(latestKey);
-
+  // Alt+H toggles stealth hide while HUD is open
   React.useEffect(() => {
-    if (prevLatestKeyRef.current !== latestKey) {
-      prevLatestKeyRef.current = latestKey;
-      if (activeInsights.length > 0) {
-        setActiveIndex(0);
-        setMinimized(false);
-        setShowSources(false);
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && e.key.toLowerCase() === 'h') {
+        e.preventDefault();
+        setStealthHidden((prev) => !prev);
       }
-    }
-  }, [latestKey, activeInsights.length]);
-
-  const currentInsight: SalesInsight | undefined =
-    activeInsights[Math.min(activeIndex, Math.max(0, activeInsights.length - 1))];
-
-  const matchedBattlecard = React.useMemo(() => {
-    const compName = currentInsight?.competitorName;
-    if (!compName) return undefined;
-    const target = compName.toLowerCase();
-    return battlecards.find(
-      (b) =>
-        b.competitorName.toLowerCase() === target ||
-        (b.aliases || []).some((a) => a.toLowerCase() === target),
-    );
-  }, [currentInsight?.competitorName, battlecards]);
-
-  const weaknesses =
-    currentInsight?.competitorWeaknesses && currentInsight.competitorWeaknesses.length > 0
-      ? currentInsight.competitorWeaknesses
-      : matchedBattlecard?.theirWeaknesses?.slice(0, 2);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open]);
 
   if (!open) return null;
+
+  const latestAnswer = meeting?.quickAnswers?.[0] || null;
+  const latestInsight = meeting?.insights.find((i) => !i.dismissed) || null;
+  const latestOtherTurn = meeting
+    ? [...meeting.transcript]
+        .reverse()
+        .find((t) => t.speaker !== 'Sales Representative' && t.speaker !== 'AE') ||
+      meeting.transcript[meeting.transcript.length - 1]
+    : null;
 
   const cycleCorner = () => {
     const idx = CORNER_ORDER.indexOf(corner);
     setCorner(CORNER_ORDER[(idx + 1) % CORNER_ORDER.length]);
   };
 
-  const handleCopy = (id: string, text: string) => {
-    onCopyText(text, 'Counter-pitch copied');
-    setCopiedId(id);
-    window.setTimeout(() => setCopiedId(null), 1500);
+  const handleCopyCurrent = () => {
+    const text =
+      latestAnswer?.spokenAnswer ||
+      latestInsight?.suggestedResponse ||
+      latestInsight?.recommendedApproach ||
+      '';
+    if (!text) return;
+    onCopyText(text, 'Copied from Stealth HUD');
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
   };
 
-  // Ultra-compact corner pill when minimized so user has full screen unobstructed
+  if (stealthHidden) {
+    return (
+      <button
+        type="button"
+        onClick={() => setStealthHidden(false)}
+        title="Restore Stealth Overlay (Alt+H)"
+        className={`fixed ${CORNER_CLASSES[corner]} z-40 px-2.5 py-1.5 rounded-md bg-[#0B1120]/70 hover:bg-[#0B1120] text-slate-300 text-[11px] font-medium border border-slate-700/70 transition-opacity`}
+      >
+        Show HUD (Alt+H)
+      </button>
+    );
+  }
+
   if (minimized) {
     return (
       <div
-        className={`fixed ${CORNER_CLASSES[corner]} z-40 rounded-full bg-[#0F172A] text-white shadow-xl border border-indigo-500/40 px-3 py-1.5 flex items-center gap-2`}
+        style={{ opacity: opacity / 100 }}
+        className={`fixed ${CORNER_CLASSES[corner]} z-40 rounded-lg bg-[#0B1120] text-white shadow-xl border border-slate-700/90 px-3 py-2 flex items-center gap-2.5`}
       >
         <button
           type="button"
           onClick={() => setMinimized(false)}
-          className="flex items-center gap-2 text-xs font-semibold hover:text-indigo-200"
+          className="flex items-center gap-2 text-xs font-medium hover:text-indigo-200 whitespace-nowrap"
         >
-          <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-          <span>Copilot HUD</span>
-          {activeInsights.length > 0 && (
-            <span className="px-1.5 py-0.2 rounded-full bg-[#4F46E5] text-[10px] font-mono">
-              {activeInsights.length}
-            </span>
-          )}
+          <span>Stealth Copilot</span>
           {audioState.capturing && (
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-[11px] text-emerald-400 font-medium">· Listening</span>
           )}
         </button>
+        {onRequestQuickAnswer && (
+          <button
+            type="button"
+            disabled={quickAnswering}
+            onClick={() => {
+              setMinimized(false);
+              void onRequestQuickAnswer({ style, speed: 'fast' });
+            }}
+            className="px-2 py-1 rounded bg-[#4F46E5] hover:bg-[#4338CA] text-white text-[11px] font-semibold inline-flex items-center gap-1 whitespace-nowrap"
+          >
+            <Zap className="w-3 h-3" />
+            Answer
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setMinimized(false)}
-          aria-label="Expand Corner HUD"
-          className="p-0.5 rounded hover:bg-slate-800 text-slate-300"
+          aria-label="Expand Stealth HUD"
+          className="p-1 rounded hover:bg-slate-800 text-slate-300"
         >
-          <Maximize2 className="w-3 h-3" />
+          <Maximize2 className="w-3.5 h-3.5" />
         </button>
         <button
           type="button"
           onClick={onClose}
-          aria-label="Close Corner HUD"
-          className="p-0.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
+          aria-label="Close Stealth HUD"
+          className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
         >
-          <X className="w-3 h-3" />
+          <X className="w-3.5 h-3.5" />
         </button>
       </div>
     );
@@ -209,18 +192,16 @@ export const CornerCopilotHud: React.FC<CornerCopilotHudProps> = ({
 
   return (
     <aside
-      aria-label="Corner Copilot HUD"
-      className={`fixed ${CORNER_CLASSES[corner]} z-40 w-[336px] max-w-[calc(100vw-24px)] rounded-xl bg-white text-slate-900 shadow-2xl border border-indigo-200 overflow-hidden`}
+      aria-label="Stealth Copilot Overlay"
+      style={{ opacity: opacity / 100 }}
+      className={`fixed ${CORNER_CLASSES[corner]} z-40 w-[390px] max-w-[calc(100vw-24px)] rounded-xl bg-[#0B1120] text-slate-100 shadow-2xl border border-slate-700/90 overflow-hidden backdrop-blur-md`}
     >
-      {/* Compact Dark Header */}
-      <div className="px-3 py-2 bg-[#0F172A] text-white flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <Sparkles className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-          <span className="text-[11px] font-semibold truncate">
-            Copilot Corner HUD
-          </span>
-          {(analyzing || audioState.transcribingCount > 0) && (
-            <Loader2 className="w-3 h-3 animate-spin text-indigo-300 shrink-0" />
+      {/* Stealth Header */}
+      <div className="px-3.5 py-2.5 border-b border-slate-800 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-xs font-semibold text-white truncate">Stealth Copilot</span>
+          {(quickAnswering || analyzing || audioState.transcribingCount > 0) && (
+            <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400 shrink-0" />
           )}
         </div>
 
@@ -230,16 +211,12 @@ export const CornerCopilotHud: React.FC<CornerCopilotHudProps> = ({
             onClick={() =>
               audioState.capturing ? onStopAudioCapture() : void onStartAudioCapture('dual')
             }
-            title={
+            className={`px-2 py-1 rounded text-[11px] font-medium inline-flex items-center gap-1 whitespace-nowrap ${
               audioState.capturing
-                ? 'Stop listening'
-                : 'Listen to Zoom audio + Mic (No Bot)'
-            }
-            className={`px-1.5 py-0.5 rounded text-[10px] font-medium border inline-flex items-center gap-1 ${
-              audioState.capturing
-                ? 'bg-emerald-600 text-white border-emerald-500'
-                : 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                ? 'bg-emerald-600 text-white'
+                : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
             }`}
+            title={audioState.capturing ? 'Stop listening' : 'Listen to call audio + mic'}
           >
             {audioState.capturing ? (
               <>
@@ -247,260 +224,172 @@ export const CornerCopilotHud: React.FC<CornerCopilotHudProps> = ({
               </>
             ) : (
               <>
-                <Mic className="w-2.5 h-2.5 text-emerald-400" /> Listen
+                <Mic className="w-3 h-3 text-emerald-400" /> Listen
               </>
             )}
           </button>
 
-          {activeInsights.length > 1 && (
-            <div className="flex items-center gap-0.5 text-[10px] font-mono text-slate-300">
-              <button
-                type="button"
-                onClick={() => setActiveIndex((i) => Math.max(0, i - 1))}
-                disabled={activeIndex === 0}
-                className="p-0.5 rounded hover:bg-slate-800 disabled:opacity-35"
-                aria-label="Previous tip"
-              >
-                <ChevronLeft className="w-3 h-3" />
-              </button>
-              <span>
-                {activeIndex + 1}/{activeInsights.length}
-              </span>
-              <button
-                type="button"
-                onClick={() =>
-                  setActiveIndex((i) => Math.min(activeInsights.length - 1, i + 1))
-                }
-                disabled={activeIndex >= activeInsights.length - 1}
-                className="p-0.5 rounded hover:bg-slate-800 disabled:opacity-35"
-                aria-label="Next tip"
-              >
-                <ChevronRight className="w-3 h-3" />
-              </button>
-            </div>
-          )}
-
-          {onChangeDensity && (
-            <button
-              type="button"
-              onClick={() =>
-                onChangeDensity(
-                  density === 'compact'
-                    ? 'standard'
-                    : density === 'standard'
-                    ? 'expanded'
-                    : 'compact',
-                )
-              }
-              title={`Display density: ${density} (click to cycle)`}
-              className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[9.5px] font-mono uppercase text-slate-200"
-            >
-              {density === 'compact' ? 'C' : density === 'standard' ? 'S' : 'E'}
-            </button>
-          )}
-
           <button
             type="button"
             onClick={cycleCorner}
-            title="Move HUD to another corner"
+            title="Move overlay corner"
             className="p-1 rounded hover:bg-slate-800 text-slate-300"
           >
             <CornerIcon corner={corner} />
           </button>
           <button
             type="button"
-            onClick={() => setMinimized(true)}
-            aria-label="Minimize Corner HUD"
+            onClick={() => setStealthHidden(true)}
+            title="Quick hide (Alt+H)"
             className="p-1 rounded hover:bg-slate-800 text-slate-300"
           >
-            <Minimize2 className="w-3 h-3" />
+            <EyeOff className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setMinimized(true)}
+            aria-label="Minimize Stealth HUD"
+            className="p-1 rounded hover:bg-slate-800 text-slate-300"
+          >
+            <Minimize2 className="w-3.5 h-3.5" />
           </button>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close Corner HUD"
+            aria-label="Close Stealth HUD"
             className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
           >
-            <X className="w-3 h-3" />
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
 
-      {/* Scrollable Compact Card Body */}
-      <div className="p-3 space-y-2 max-h-[340px] overflow-y-auto">
-        {!currentInsight ? (
-          <div className="py-3 text-center space-y-2">
-            <div className="text-xs font-semibold text-slate-800">
-              Monitoring in Corner
+      {/* Quick Action Bar inside Overlay */}
+      <div className="px-3.5 py-2 border-b border-slate-800/80 flex items-center justify-between gap-2 bg-[#0F172A]">
+        <div className="flex items-center gap-1">
+          {(['concise', 'star', 'technical'] as const).map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => setStyle(s)}
+              className={`px-2 py-1 rounded text-[11px] font-medium capitalize transition-colors ${
+                style === s
+                  ? 'bg-slate-700 text-white'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {s === 'star' ? 'STAR' : s === 'technical' ? 'Tech' : 'Concise'}
+            </button>
+          ))}
+        </div>
+
+        {onRequestQuickAnswer && (
+          <button
+            type="button"
+            disabled={quickAnswering}
+            onClick={() => void onRequestQuickAnswer({ style, speed: 'fast' })}
+            className="px-2.5 py-1 rounded bg-[#4F46E5] hover:bg-[#4338CA] text-white text-[11px] font-semibold inline-flex items-center gap-1 whitespace-nowrap disabled:opacity-60"
+          >
+            <Zap className="w-3 h-3" />
+            {quickAnswering ? 'Drafting...' : 'Answer Now'}
+          </button>
+        )}
+      </div>
+
+      {/* Scrollable Teleprompter Body */}
+      <div className="p-3.5 space-y-3 max-h-[340px] overflow-y-auto">
+        {latestOtherTurn && (
+          <div className="text-[11px] text-slate-400 leading-snug pb-2 border-b border-slate-800">
+            <span className="font-medium text-slate-300">Heard: </span>
+            &ldquo;{latestOtherTurn.text}&rdquo;
+          </div>
+        )}
+
+        {latestAnswer ? (
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400">
+              <span className="font-semibold text-indigo-300 truncate">
+                {latestAnswer.headline}
+              </span>
+              <span className="font-mono tabular-nums shrink-0">
+                {(latestAnswer.latencyMs / 1000).toFixed(1)}s
+              </span>
             </div>
-            <p className="text-[11px] text-slate-500 leading-snug">
-              Stay anywhere on the page. When a prospect mentions a competitor or objection, tips pop up right here.
+
+            <p className="text-[13px] text-white leading-relaxed tracking-[0.01em]">
+              {latestAnswer.spokenAnswer}
+            </p>
+
+            {latestAnswer.keyBullets.length > 0 && (
+              <ul className="space-y-1 text-[12px] text-slate-200 list-disc pl-4 leading-snug">
+                {latestAnswer.keyBullets.slice(0, 4).map((b, i) => (
+                  <li key={i}>{b}</li>
+                ))}
+              </ul>
+            )}
+
+            {latestAnswer.codeSnippet && (
+              <pre className="p-2.5 rounded bg-slate-950 border border-slate-800 text-[11px] font-mono text-indigo-200 overflow-x-auto">
+                <code>{latestAnswer.codeSnippet}</code>
+              </pre>
+            )}
+          </div>
+        ) : latestInsight ? (
+          <div className="space-y-2">
+            <div className="text-xs font-semibold text-indigo-300">
+              {latestInsight.objectionDetected || latestInsight.title}
+            </div>
+            <p className="text-[13px] text-white leading-relaxed">
+              {latestInsight.suggestedResponse || latestInsight.recommendedApproach}
+            </p>
+          </div>
+        ) : (
+          <div className="py-4 text-center space-y-2.5">
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Click <strong className="text-white">Listen</strong> to capture call audio privately, or press <strong className="text-white">Answer Now</strong> anytime.
             </p>
             <button
               type="button"
               onClick={onOpenAudioSettings}
-              className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-[#EEF2FF] text-[#4338CA] border border-[#C7D2FE] hover:bg-indigo-100"
+              className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200"
             >
-              Audio Capture Options
+              Audio Setup
             </button>
           </div>
-        ) : (
-          <>
-            {(() => {
-              const pill = statusPill(
-                currentInsight.objectionStatus,
-                currentInsight.evolutionCount || 1,
-              );
-              return (
-                <div className="space-y-0.5">
-                  <div className="flex items-center justify-between gap-1.5">
-                    <span className="text-[10px] font-bold uppercase tracking-wide text-[#4338CA] truncate">
-                      {currentInsight.competitorName
-                        ? `Competitor · ${currentInsight.competitorName}`
-                        : currentInsight.objectionCategory || currentInsight.category}
-                    </span>
-                    <span
-                      className={`px-1.5 py-0.5 rounded border text-[9px] font-semibold shrink-0 ${pill.className}`}
-                    >
-                      {pill.label}
-                    </span>
-                  </div>
-                  <div className="text-xs font-bold text-slate-900 leading-snug">
-                    {currentInsight.objectionDetected || currentInsight.title}
-                  </div>
-                </div>
-              );
-            })()}
+        )}
+      </div>
 
-            {density !== 'compact' &&
-              currentInsight.competitorName &&
-              weaknesses &&
-              weaknesses.length > 0 && (
-                <div className="rounded-md bg-[#FFFBEB] border border-[#FDE68A] p-2 space-y-0.5">
-                  <div className="text-[9px] font-bold uppercase tracking-wider text-[#92400E] flex items-center gap-1">
-                    <ShieldAlert className="w-3 h-3 text-amber-600" />
-                    {currentInsight.competitorName} Weaknesses
-                  </div>
-                  <ul className="space-y-0.5 text-[10.5px] text-amber-950 list-disc pl-3.5 leading-snug">
-                    {weaknesses.slice(0, density === 'expanded' ? 3 : 2).map((w, idx) => (
-                      <li key={idx}>{w}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+      {/* Footer: Transparency Slider + Copy */}
+      <div className="px-3.5 py-2 border-t border-slate-800 bg-[#0F172A] flex items-center justify-between gap-3 text-[11px] text-slate-400">
+        <label className="flex items-center gap-2">
+          <span>Opacity</span>
+          <input
+            type="range"
+            min={55}
+            max={100}
+            value={opacity}
+            onChange={(e) => setOpacity(Number(e.target.value))}
+            className="w-20 accent-indigo-500 cursor-pointer"
+          />
+          <span className="font-mono tabular-nums w-8">{opacity}%</span>
+        </label>
 
-            {density === 'expanded' && currentInsight.underlyingConcern && (
-              <div className="text-[10.5px] text-slate-700 leading-snug">
-                <span className="font-semibold text-slate-900">Concern: </span>
-                {currentInsight.underlyingConcern}
-              </div>
+        {(latestAnswer || latestInsight) && (
+          <button
+            type="button"
+            onClick={handleCopyCurrent}
+            className="text-slate-200 hover:text-white inline-flex items-center gap-1 font-medium whitespace-nowrap"
+          >
+            {copied ? (
+              <>
+                <Check className="w-3 h-3 text-emerald-400" /> Copied
+              </>
+            ) : (
+              <>
+                <Copy className="w-3 h-3" /> Copy
+              </>
             )}
-
-            {currentInsight.abstained && (
-              <div className="rounded-md bg-[#FFF1F2] border border-[#FECDD3] p-2 text-[10.5px] text-[#9F1239] flex items-start gap-1.5">
-                <AlertTriangle className="w-3 h-3 text-[#E11D48] shrink-0 mt-0.5" />
-                <span>
-                  {currentInsight.limitations[0] ||
-                    'No verified battlecard on file—use discovery questions.'}
-                </span>
-              </div>
-            )}
-
-            <div className="rounded-md bg-[#EEF2FF]/75 border border-[#C7D2FE] p-2 space-y-1">
-              <div className="text-[10.5px] text-[#312E81] leading-snug">
-                <span className="font-bold">Approach: </span>
-                {currentInsight.recommendedApproach || currentInsight.suggestedAction}
-              </div>
-              {currentInsight.suggestedResponse && (
-                <div className="pt-1 border-t border-indigo-200/70 text-[11px] text-slate-900 leading-snug">
-                  <span className="font-bold text-[#4338CA]">Pitch Now: </span>
-                  &ldquo;{currentInsight.suggestedResponse}&rdquo;
-                </div>
-              )}
-            </div>
-
-            {density !== 'compact' && currentInsight.discoveryQuestion && (
-              <div className="flex items-start gap-1.5 rounded-md bg-slate-50 border border-slate-200 p-1.5 text-[10.5px] text-slate-800">
-                <Lightbulb className="w-3 h-3 text-sky-600 shrink-0 mt-0.5" />
-                <div>
-                  <span className="font-semibold text-sky-800">Ask Next: </span>
-                  {currentInsight.discoveryQuestion}
-                </div>
-              </div>
-            )}
-
-            <div className="pt-1 border-t border-slate-100 flex items-center justify-between gap-1 text-[10.5px]">
-              <button
-                type="button"
-                onClick={() => setShowSources((s) => !s)}
-                className="inline-flex items-center gap-1 font-medium text-[#4F46E5] hover:underline"
-              >
-                <BookOpen className="w-3 h-3" />
-                Sources ({currentInsight.supportingSources.length})
-                {showSources || density === 'expanded' ? (
-                  <ChevronUp className="w-3 h-3" />
-                ) : (
-                  <ChevronDown className="w-3 h-3" />
-                )}
-              </button>
-
-              <div className="flex items-center gap-1">
-                {currentInsight.suggestedResponse && (
-                  <button
-                    type="button"
-                    onClick={() => handleCopy(currentInsight.id, currentInsight.suggestedResponse!)}
-                    className="px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium inline-flex items-center gap-1"
-                  >
-                    {copiedId === currentInsight.id ? (
-                      <>
-                        <Check className="w-3 h-3 text-emerald-600" /> Copied
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3 h-3" /> Copy
-                      </>
-                    )}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => onInsightFeedback(currentInsight.id, 'helpful')}
-                  className={`p-1 rounded border ${
-                    currentInsight.feedback?.rating === 'helpful'
-                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                  }`}
-                  aria-label="Mark useful"
-                >
-                  <ThumbsUp className="w-3 h-3" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onInsightAction(currentInsight.id, 'dismiss')}
-                  className="p-1 rounded text-slate-400 hover:text-rose-700 hover:bg-rose-50"
-                  aria-label="Dismiss tip"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-            </div>
-
-            {(showSources || density === 'expanded') && (
-              <div className="space-y-1">
-                {currentInsight.supportingSources.map((src, idx) => (
-                  <div
-                    key={idx}
-                    className="rounded border border-slate-200 bg-slate-50 p-1.5 text-[10px]"
-                  >
-                    <div className="font-semibold text-slate-800">{src.title}</div>
-                    {density === 'expanded' && src.excerpt && (
-                      <div className="text-slate-600 mt-0.5 line-clamp-2">{src.excerpt}</div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
+          </button>
         )}
       </div>
     </aside>
