@@ -92,10 +92,33 @@ export function classifyZoomSpeaker(
   }
 
   if (cleanName) {
-    const aeLower = meeting.aeName.toLowerCase();
-    const aeFirst = aeLower.split(/\s+/)[0];
     const speakerLower = cleanName.toLowerCase();
-    if (speakerLower === aeLower || (aeFirst.length >= 3 && speakerLower.includes(aeFirst))) {
+    // 1. If the speaker matches any known prospect stakeholder on this meeting, always classify as Prospect
+    const matchesKnownProspect = meeting.prospectStakeholders.some((stakeholder) => {
+      const cleanedStakeholder = stakeholder.replace(/\([^)]*\)/g, '').trim().toLowerCase();
+      if (!cleanedStakeholder) return false;
+      return (
+        speakerLower === cleanedStakeholder ||
+        speakerLower.includes(cleanedStakeholder) ||
+        cleanedStakeholder.includes(speakerLower)
+      );
+    });
+    if (matchesKnownProspect) {
+      return { speaker: 'Prospect', speakerName: cleanName };
+    }
+
+    // 2. Match Sales Rep by full name, or exact single-word first name (avoid matching "Elena Rostova" to "Elena Vance")
+    const aeLower = meeting.aeName.trim().toLowerCase();
+    const aeParts = aeLower.split(/\s+/).filter(Boolean);
+    const speakerParts = speakerLower.replace(/\([^)]*\)/g, '').trim().split(/\s+/).filter(Boolean);
+    const isExactAeName =
+      speakerLower === aeLower ||
+      speakerLower.startsWith(`${aeLower} `) ||
+      speakerLower.includes(`(${aeLower})`);
+    const isSingleWordAeFirst =
+      speakerParts.length === 1 && aeParts.length > 0 && aeParts[0].length >= 3 && speakerParts[0] === aeParts[0];
+
+    if (isExactAeName || isSingleWordAeFirst) {
       return { speaker: 'Sales Representative', speakerName: cleanName };
     }
   }
@@ -193,6 +216,13 @@ export function normalizeZoomWebhookPayload(
         ? inner.is_final
         : true;
 
+    const speakerRole: SpeakerRole | undefined =
+      participant.is_host === true
+        ? 'Sales Representative'
+        : participant.is_host === false
+        ? 'Prospect'
+        : undefined;
+
     return {
       kind: text.trim() && isFinal ? 'transcript' : 'ignored',
       meetingId: queryMeetingId || (typeof body.meetingId === 'string' ? body.meetingId : undefined),
@@ -200,7 +230,7 @@ export function normalizeZoomWebhookPayload(
       provider: 'recall',
       statusUpdate: 'in_call',
       speakerName,
-      speakerRole: isHost ? 'Sales Representative' : undefined,
+      speakerRole,
       text: text.trim(),
       isFinal,
       eventId: typeof body.id === 'string' ? body.id : undefined,

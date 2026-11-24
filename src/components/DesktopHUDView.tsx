@@ -173,6 +173,7 @@ export const DesktopHUDView: React.FC<DesktopHUDViewProps> = ({
       : matchedBattlecard?.theirWeaknesses?.slice(0, 3);
 
   const latestTurn = selectedMeeting?.transcript[selectedMeeting.transcript.length - 1];
+  const latestQuickAnswer = selectedMeeting?.quickAnswers?.[0] || null;
 
   const elapsedSec = React.useMemo(() => {
     if (!selectedMeeting || selectedMeeting.status === 'created') return 0;
@@ -401,14 +402,52 @@ export const DesktopHUDView: React.FC<DesktopHUDViewProps> = ({
           </div>
         )}
 
-        {!currentInsight ? (
+        {latestQuickAnswer && (
+          <div className="rounded-xl bg-white text-slate-900 shadow-xl border border-indigo-200 p-3.5 space-y-2">
+            <div className="flex items-center justify-between gap-2 text-[10px]">
+              <span className="font-bold uppercase tracking-wide text-[#4338CA] truncate">
+                Instant Answer · {(latestQuickAnswer.latencyMs / 1000).toFixed(1)}s
+              </span>
+              <button
+                type="button"
+                onClick={() => handleCopy(latestQuickAnswer.id, latestQuickAnswer.spokenAnswer)}
+                className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium inline-flex items-center gap-1 shrink-0"
+              >
+                {copiedId === latestQuickAnswer.id ? (
+                  <>
+                    <Check className="w-3 h-3 text-emerald-600" /> Copied
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3 h-3" /> Copy
+                  </>
+                )}
+              </button>
+            </div>
+            <div className="text-xs font-bold text-slate-900 leading-snug">
+              {latestQuickAnswer.headline}
+            </div>
+            <p className="text-xs text-slate-800 leading-relaxed">
+              {latestQuickAnswer.spokenAnswer}
+            </p>
+            {latestQuickAnswer.keyBullets.length > 0 && (
+              <ul className="space-y-0.5 text-[11px] text-slate-700 list-disc pl-4 leading-snug">
+                {latestQuickAnswer.keyBullets.slice(0, 3).map((b, i) => (
+                  <li key={i}>{b}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {!currentInsight && !latestQuickAnswer ? (
           <div className="rounded-xl bg-slate-900/80 border border-slate-800 p-5 text-center space-y-2.5 mt-4">
             <Sparkles className="w-6 h-6 text-indigo-400 mx-auto" />
             <div className="text-sm font-semibold text-white">
               Waiting for Live Zoom Utterance
             </div>
             <p className="text-xs text-slate-400 leading-relaxed">
-              This floating HUD updates automatically the moment a prospect raises a concern or names a competitor on your Zoom call.
+              This floating HUD updates automatically the moment a prospect asks a question, raises a concern, or names a competitor on your Zoom call.
             </p>
             <button
               type="button"
@@ -419,7 +458,7 @@ export const DesktopHUDView: React.FC<DesktopHUDViewProps> = ({
               Listen Live (Mic + Zoom Audio)
             </button>
           </div>
-        ) : (
+        ) : currentInsight ? (
           <div className="rounded-xl bg-white text-slate-900 shadow-xl border border-indigo-200 p-3.5 space-y-2.5">
             {(() => {
               const pill = statusPill(
@@ -605,7 +644,7 @@ export const DesktopHUDView: React.FC<DesktopHUDViewProps> = ({
               </div>
             )}
           </div>
-        )}
+        ) : null}
       </main>
 
       {/* Bottom Live Caption + Quick Utterance Fallback */}

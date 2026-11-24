@@ -279,10 +279,11 @@ export function getAiRuntimeInfo(): ValidatedAiEnvironment {
 function getGroqChatModels(preferFast = false): string[] {
   const configured = sanitizeModelId(process.env.GROQ_MODEL, 'openai/gpt-oss-120b');
   const fastConfigured = sanitizeModelId(process.env.GROQ_FAST_MODEL, 'openai/gpt-oss-20b');
-  const defaults = preferFast
-    ? [fastConfigured, configured, 'openai/gpt-oss-120b', 'llama-3.3-70b-versatile']
-    : [configured, 'openai/gpt-oss-120b', fastConfigured, 'llama-3.3-70b-versatile'];
-  return Array.from(new Set(defaults));
+  const unique = Array.from(
+    new Set(preferFast ? [fastConfigured, configured] : [configured, fastConfigured]),
+  );
+  // Allow one final retry on the fast model to survive rapid live-call TPM bursts cleanly
+  return unique.length > 0 ? [...unique, fastConfigured] : ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'];
 }
 
 function extractApiError(err: unknown): string {
@@ -310,11 +311,12 @@ function parseJsonPayload<T>(raw: string): T {
 }
 
 async function withModelFallbackRetry<T>(
-  fn: (model: string, signal: AbortSignal) => Promise<T>,
+  fn: (model: string, signal: AbortSignal, attempt: number, relaxJsonMode: boolean) => Promise<T>,
   models = getGroqChatModels(),
   attemptTimeoutMs = 25000,
 ): Promise<T> {
   let lastErr: unknown;
+  let relaxJsonMode = false;
   for (let attempt = 0; attempt < models.length; attempt++) {
     const model = models[attempt];
     const t0 = Date.now();
@@ -327,7 +329,7 @@ async function withModelFallbackRetry<T>(
 
     try {
       const res = await Promise.race([
-        fn(model, controller.signal),
+        fn(model, controller.signal, attempt, relaxJsonMode),
         new Promise<never>((_, reject) => {
           controller.signal.addEventListener(
             'abort',
@@ -341,6 +343,9 @@ async function withModelFallbackRetry<T>(
     } catch (err) {
       lastErr = timedOut ? new Error(`AI_TIMEOUT after ${attemptTimeoutMs}ms`) : err;
       const msg = extractApiError(lastErr);
+      if (msg.includes('json_validate_failed') || msg.includes('invalid JSON')) {
+        relaxJsonMode = true;
+      }
       const isTransient =
         timedOut ||
         msg.includes('AI_TIMEOUT') ||
@@ -362,8 +367,9 @@ async function withModelFallbackRetry<T>(
         console.error(`[Groq] ${model} failed in ${Date.now() - t0}ms: ${msg}`);
         throw lastErr;
       }
+      const backoffMs = msg.includes('429') || msg.toLowerCase().includes('rate limit') ? 850 : 350;
       console.log(`[Groq] ${model} transient retry (${Date.now() - t0}ms): ${msg}`);
-      await new Promise((resolve) => setTimeout(resolve, 350));
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
     } finally {
       clearTimeout(timer);
     }
@@ -394,8 +400,21 @@ async function llmChatJson<T>(params: {
   const apiKey = getGroqApiKey();
 
   return withModelFallbackRetry(
-    async (model, signal) => {
+    async (model, signal, _attempt, relaxJsonMode) => {
       const t0 = Date.now();
+      const payload: Record<string, unknown> = {
+        model,
+        temperature: params.temperature ?? 0.2,
+        max_tokens: params.maxTokens ?? 1400,
+        messages: [
+          { role: 'system', content: params.systemPrompt },
+          { role: 'user', content: params.userPrompt },
+        ],
+      };
+      if (!relaxJsonMode) {
+        payload.response_format = { type: 'json_object' };
+      }
+
       const res = await fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
@@ -403,16 +422,7 @@ async function llmChatJson<T>(params: {
           'Content-Type': 'application/json',
         },
         signal,
-        body: JSON.stringify({
-          model,
-          temperature: params.temperature ?? 0.2,
-          max_tokens: params.maxTokens ?? 1400,
-          response_format: { type: 'json_object' },
-          messages: [
-            { role: 'system', content: params.systemPrompt },
-            { role: 'user', content: params.userPrompt },
-          ],
-        }),
+        body: JSON.stringify(payload),
       });
 
       const requestId =
@@ -517,9 +527,10 @@ export class GroqSalesProvider implements SalesAIProvider {
     const ragContext =
       params.retrievedChunks.length > 0
         ? params.retrievedChunks
+            .slice(0, 4)
             .map(
               (c) =>
-                `[documentId="${c.docId}" | title="${c.docTitle}" | section="${c.headingPath || c.sectionTitle || c.category}"]\n${c.content.slice(0, 750)}`,
+                `[documentId="${c.docId}" | title="${c.docTitle}" | section="${c.headingPath || c.sectionTitle || c.category}"]\n${c.content.slice(0, 480)}`,
             )
             .join('\n\n')
         : 'NONE — No matching approved documents were retrieved for this utterance.';
@@ -619,7 +630,7 @@ Keep every text field crisp (1-2 short sentences max) so an Account Executive ca
         systemPrompt,
         userPrompt,
         temperature: 0.2,
-        maxTokens: 1200,
+        maxTokens: 900,
         timeoutMs: 25000,
       });
 

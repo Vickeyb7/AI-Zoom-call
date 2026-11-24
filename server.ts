@@ -280,18 +280,89 @@ async function startServer() {
   }
 
   const quickAnswerInFlight = new Set<string>();
+  const pendingQuickAnswer = new Map<
+    string,
+    { meeting: MeetingSession; user: UserProfile; question: string }
+  >();
 
-  function detectSpokenQuestionOrPrompt(text: string): boolean {
+  function detectSpokenQuestionOrPrompt(text: string, meeting?: MeetingSession): boolean {
     const trimmed = text.trim();
     if (trimmed.length < 10) return false;
     if (trimmed.includes('?')) return true;
     const lower = trimmed.toLowerCase();
-    return /^(how|what|why|when|where|who|which|can you|could you|would you|do you|does your|are you|have you|tell me|walk me through|explain|describe|compare|help me understand)\b/.test(
-      lower,
-    ) ||
-      /\b(tell me about|walk me through|how does|how do you|what is your|why should|pricing|expensive|cost|budget|competitor|lambdatest|browserstack|sauce labs|security|soc2|integration|latency|scale|architecture|design a|implement|trade-off|tradeoff)\b/.test(
+
+    if (
+      /^(how|what|why|when|where|who|which|can you|could you|would you|do you|does your|are you|have you|tell me|walk me through|explain|describe|compare|help me understand)\b/.test(
         lower,
-      );
+      )
+    ) {
+      return true;
+    }
+
+    if (
+      /\b(tell me about|walk me through|how does|how do you|what is your|why should|pric(e|ing)|expensive|cheaper|cost|budget|discount|renewal|quote|roi|payback|cfo|competitor|lambdatest|browserstack|sauce labs|apexcloud|security|soc\s?2|hipaa|gdpr|data residency|retention|byok|sso|saml|integration|latency|scale|architecture|design a|implement|migrat|switching|onboarding|timeline|deadline|worried|concern|blocker|hesitant|push back|procurement|legal|msa|redline|pilot|poc|proof of concept|sla|uptime|trade-off|tradeoff)\b/.test(
+        lower,
+      )
+    ) {
+      return true;
+    }
+
+    if (meeting) {
+      const primaryComp = meeting.primaryCompetitor?.trim().toLowerCase();
+      if (primaryComp && primaryComp.length >= 3 && primaryComp !== 'none identified' && lower.includes(primaryComp)) {
+        return true;
+      }
+      const orgBattlecards = store
+        .getState()
+        .battlecards.filter((b) => b.organisationId === meeting.organisationId);
+      for (const bc of orgBattlecards) {
+        if (
+          bc.competitorName.length >= 3 &&
+          lower.includes(bc.competitorName.toLowerCase())
+        ) {
+          return true;
+        }
+        if (
+          (bc.aliases || []).some((a) => a.trim().length >= 3 && lower.includes(a.trim().toLowerCase()))
+        ) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  function triggerAutoQuickAnswer(meeting: MeetingSession, user: UserProfile, question: string) {
+    if (quickAnswerInFlight.has(meeting.id)) {
+      // Coalesce rapid back-to-back Zoom utterances so the salesperson always gets an answer for the latest question
+      pendingQuickAnswer.set(meeting.id, { meeting, user, question });
+      return;
+    }
+
+    quickAnswerInFlight.add(meeting.id);
+    void generateAndStoreQuickAnswer({
+      meeting,
+      user,
+      question,
+      autoTriggered: true,
+    })
+      .catch((err) => {
+        logger.warn(
+          'QuickAnswer',
+          `Auto-answer failed for meeting=${meeting.id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      })
+      .finally(() => {
+        quickAnswerInFlight.delete(meeting.id);
+        const queued = pendingQuickAnswer.get(meeting.id);
+        if (queued) {
+          pendingQuickAnswer.delete(meeting.id);
+          if (queued.meeting.status === 'active' || queued.meeting.status === 'created') {
+            triggerAutoQuickAnswer(queued.meeting, queued.user, queued.question);
+          }
+        }
+      });
   }
 
   async function generateAndStoreQuickAnswer(params: {
@@ -450,31 +521,22 @@ async function startServer() {
   }) {
     const { meeting, speaker, speakerName, text, eventId, user } = params;
 
-    // Parakeet-style auto-answer: fire instant fast-model response concurrently when the other speaker asks a question
+    // Guard deduplication and lifecycle state BEFORE firing concurrent auto-answer
+    const isDuplicateEvent = Boolean(eventId && meeting.transcript.some((t) => t.eventId === eventId));
+    const canAcceptTurn =
+      meeting.status !== 'paused' && meeting.status !== 'completed' && meeting.status !== 'failed';
+
+    // Parakeet-style auto-answer: fire instant fast-model response concurrently when the prospect speaks a question or sales objection
     const isOtherSpeaker = speaker !== 'Sales Representative' && speaker !== 'AE';
     const autoAnswerEnabled = meeting.sessionContext?.autoAnswer !== false;
     if (
+      canAcceptTurn &&
+      !isDuplicateEvent &&
       isOtherSpeaker &&
       autoAnswerEnabled &&
-      detectSpokenQuestionOrPrompt(text) &&
-      !quickAnswerInFlight.has(meeting.id)
+      detectSpokenQuestionOrPrompt(text, meeting)
     ) {
-      quickAnswerInFlight.add(meeting.id);
-      void generateAndStoreQuickAnswer({
-        meeting,
-        user,
-        question: text,
-        autoTriggered: true,
-      })
-        .catch((err) => {
-          logger.warn(
-            'QuickAnswer',
-            `Auto-answer failed for meeting=${meeting.id}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        })
-        .finally(() => {
-          quickAnswerInFlight.delete(meeting.id);
-        });
+      triggerAutoQuickAnswer(meeting, user, text);
     }
 
     const result = await runLiveIntelligencePipeline({

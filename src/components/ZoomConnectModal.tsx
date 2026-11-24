@@ -378,7 +378,7 @@ export const ZoomConnectModal: React.FC<ZoomConnectModalProps> = ({
                     <div className="space-y-0.5">
                       <div className="text-xs font-semibold text-emerald-900 flex items-center gap-1.5">
                         <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                        Listening Live &amp; Streaming to Groq Whisper
+                        Listening Live &amp; Streaming to Deepgram Nova-3
                         {audioState.transcribingCount > 0 && (
                           <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-700" />
                         )}
@@ -485,7 +485,7 @@ export const ZoomConnectModal: React.FC<ZoomConnectModalProps> = ({
                     <FileAudio className="w-4 h-4 text-[#4F46E5] shrink-0" />
                     <div className="min-w-0">
                       <div className="text-xs font-semibold text-slate-800">
-                        Transcribe Audio Clip (Groq Whisper)
+                        Transcribe Audio Clip (Deepgram Nova-3)
                       </div>
                       <div className="text-[11px] text-slate-500">
                         Upload any .mp3, .wav, .m4a, or .webm clip to analyze live
